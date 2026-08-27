@@ -44,9 +44,11 @@ npm run package:firefox
 
 The Firefox upload zip is written to `dist/`.
 
+AMO listing text, reviewer notes, and permission rationale are in `docs/`.
+
 ## Local dev server
 
-Vinext blocks unknown cross-origin requests in development. For a temporary Firefox extension, copy the popup/background URL host from `about:debugging` and start Coffer with:
+Next.js development servers can reject unknown cross-origin requests. For a temporary Firefox extension, copy the popup/background URL host from `about:debugging` and start Coffer with:
 
 ```sh
 COFFER_ALLOWED_DEV_ORIGINS=<firefox-extension-uuid> npm run dev
