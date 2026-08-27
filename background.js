@@ -1,5 +1,6 @@
 /* global browser */
 
+import "./browser-compat.js";
 import "./vendor/argon2.umd.min.js";
 
 const STORAGE_KEY = "cofferAutofillSettings";
@@ -720,7 +721,7 @@ async function requestVault(cofferOrigin, body) {
         error: {
           code: "invalid_response",
           message: response.status === 403
-            ? "Coffer blocked this extension origin. Restart local Coffer with the current Firefox extension UUID."
+            ? "Coffer blocked this extension origin. Restart local Coffer with the current browser extension UUID."
             : "The Coffer API returned a non-JSON response.",
         },
       };
@@ -1342,7 +1343,7 @@ async function fillCode(accountId) {
       ok: false,
       error: {
         code: "fill_failed",
-        message: "Firefox did not allow filling this page.",
+        message: "The browser did not allow filling this page.",
       },
     };
   }

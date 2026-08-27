@@ -133,7 +133,7 @@ async function requestCofferPermission(origin) {
     return granted;
   } catch (error) {
     if (await browser.permissions.contains({ origins }).catch(() => false)) return true;
-    setStatus(`Firefox could not grant access to this Coffer URL: ${caughtErrorMessage(error, "Permission request failed.")}`, "warning");
+    setStatus(`The browser could not grant access to this Coffer URL: ${caughtErrorMessage(error, "Permission request failed.")}`, "warning");
     return false;
   }
 }
@@ -173,7 +173,7 @@ async function fillCode(account, button) {
       button.disabled = false;
     }, 900);
   } catch {
-    setStatus("Firefox did not allow filling this page.", "warning");
+    setStatus("The browser did not allow filling this page.", "warning");
     button.disabled = false;
   }
 }
