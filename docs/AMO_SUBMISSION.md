@@ -33,6 +33,7 @@ Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
 - Decrypted vault data and key handles stay in extension background memory only.
 - TOTP codes are generated locally and are not written to extension storage or clipboard.
 - The Coffer API returns encrypted vault payloads; the extension decrypts them locally after password verification.
+- Coffer accepts browser-extension origins only for read/unlock actions; vault mutations remain same-origin on the Coffer web app.
 
 ## Automated Listed Submission
 

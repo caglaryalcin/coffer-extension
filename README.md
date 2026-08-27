@@ -22,7 +22,7 @@ This repository contains the Firefox WebExtension for Coffer. It works as a smal
 - OTP codes are generated locally and are not written to extension storage.
 - The extension reads only the active tab URL while the popup is open, so page-specific codes can be shown first.
 - A short page script is injected only after **Fill** is clicked; it receives the current TOTP code and writes it to a likely one-time-code field.
-- Coffer only accepts API unlock requests from explicitly allow-listed extension origins.
+- Coffer accepts browser-extension origins for the unlock/read API flow, while vault mutations stay restricted to the same-origin Coffer web app.
 - Coffer exposes `/api/service-brands` as public catalog metadata; it does not include vault data or secrets.
 - Use HTTPS for self-hosted Coffer URLs except local development on `localhost`.
 
@@ -46,18 +46,18 @@ The Firefox upload zip is written to `dist/`.
 
 AMO listing text, reviewer notes, and permission rationale are in `docs/`.
 
-## Local dev server
+## Server notes
 
-Next.js development servers can reject unknown cross-origin requests. For a temporary Firefox extension, copy the popup/background URL host from `about:debugging` and start Coffer with:
+Production/self-hosted Coffer does not need a per-browser extension UUID in
+server configuration. Use HTTPS for non-localhost Coffer URLs.
+
+Next.js development servers can reject unknown cross-origin requests. If local
+development blocks the temporary Firefox extension, copy the popup/background
+URL host from `about:debugging` and start Coffer with:
 
 ```sh
 COFFER_ALLOWED_DEV_ORIGINS=<firefox-extension-uuid> npm run dev
 ```
 
-For production/self-hosted Coffer, allow the Firefox extension origin on the server before connecting:
-
-```sh
-COFFER_ALLOWED_EXTENSION_ORIGINS=moz-extension://<firefox-extension-uuid>
-```
-
-The vault API route only grants trusted extension access to `identify` and `login`; all vault mutations stay same-origin only.
+The vault API route grants browser extensions access only to `identify` and
+`login`; all vault mutations stay same-origin only.

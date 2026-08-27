@@ -39,6 +39,7 @@ Data handling:
 - Generated TOTP codes are not written to extension storage or the clipboard.
 - Active tab URL is read only while the popup is open to prioritize matching codes.
 - A page script is injected only after the user clicks Fill; it receives the selected TOTP code and writes it to a likely one-time-code field.
+- Coffer allows browser-extension origins only for `identify` and `login`; vault mutations remain same-origin on the Coffer web app.
 
 Third-party library:
 - `vendor/argon2.umd.min.js` is `hash-wasm` version `4.12.0`, MIT licensed.
