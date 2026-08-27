@@ -1,6 +1,6 @@
 {
   "name": "coffer-extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Firefox extension for securely filling Coffer TOTP codes.",
   "license": "GPL-3.0-only",
   "type": "module",

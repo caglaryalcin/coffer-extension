@@ -4,6 +4,7 @@ const originInput = document.querySelector("#coffer-origin");
 const connectionCard = document.querySelector("#connection-card");
 const connectionForm = document.querySelector("#connection-form");
 const openCofferButton = document.querySelector("#open-coffer");
+const lockButton = document.querySelector("#lock-coffer");
 const statusBox = document.querySelector("#status");
 const authCard = document.querySelector("#auth-card");
 const emailInput = document.querySelector("#coffer-email");
@@ -149,6 +150,10 @@ function codeMatchesSearch(account, query) {
   return haystack.includes(query);
 }
 
+function categoryLabel(account) {
+  return String(account.group || "").trim() || "Uncategorized";
+}
+
 async function fillCode(account, button) {
   button.disabled = true;
   try {
@@ -202,9 +207,25 @@ function createCodeRow() {
   return row;
 }
 
+function createCategoryHeader() {
+  const header = document.createElement("div");
+  header.className = "code-category";
+  const title = document.createElement("span");
+  const count = document.createElement("small");
+  header.append(title, count);
+  return header;
+}
+
 function setText(element, value) {
   const text = String(value);
   if (element.textContent !== text) element.textContent = text;
+}
+
+function updateCategoryHeader(header, label, count) {
+  const title = header.querySelector("span");
+  const counter = header.querySelector("small");
+  if (title) setText(title, label);
+  if (counter) setText(counter, `${count}`);
 }
 
 function updateCodeRow(row, account) {
@@ -233,7 +254,23 @@ function updateCodeRow(row, account) {
   }
 }
 
-function renderCodeRows(container, accounts, emptyMessage) {
+function groupedAccounts(accounts) {
+  const groups = [];
+  const byLabel = new Map();
+  for (const account of accounts) {
+    const label = categoryLabel(account);
+    let group = byLabel.get(label);
+    if (!group) {
+      group = { accounts: [], label };
+      byLabel.set(label, group);
+      groups.push(group);
+    }
+    group.accounts.push(account);
+  }
+  return groups;
+}
+
+function renderCodeRows(container, accounts, emptyMessage, { grouped = false } = {}) {
   if (accounts.length === 0) {
     const existingEmpty = container.firstElementChild;
     if (
@@ -251,23 +288,39 @@ function renderCodeRows(container, accounts, emptyMessage) {
   }
 
   const existingRows = new Map();
+  const existingHeaders = new Map();
   for (const child of container.children) {
     if (child.classList.contains("code-row") && child.dataset.accountId) {
       existingRows.set(child.dataset.accountId, child);
+    } else if (child.classList.contains("code-category") && child.dataset.category) {
+      existingHeaders.set(child.dataset.category, child);
     }
   }
 
-  const activeRows = new Set();
-  for (const account of accounts) {
+  const activeElements = new Set();
+  const renderAccount = (account) => {
     const row = existingRows.get(account.id) ?? createCodeRow();
     row.dataset.accountId = account.id;
-    activeRows.add(row);
+    activeElements.add(row);
     updateCodeRow(row, account);
     container.append(row);
+  };
+
+  if (grouped) {
+    for (const group of groupedAccounts(accounts)) {
+      const header = existingHeaders.get(group.label) ?? createCategoryHeader();
+      header.dataset.category = group.label;
+      activeElements.add(header);
+      updateCategoryHeader(header, group.label, group.accounts.length);
+      container.append(header);
+      for (const account of group.accounts) renderAccount(account);
+    }
+  } else {
+    for (const account of accounts) renderAccount(account);
   }
 
   for (const child of [...container.children]) {
-    if (!activeRows.has(child)) child.remove();
+    if (!activeElements.has(child)) child.remove();
   }
 }
 
@@ -295,6 +348,7 @@ function renderCodes(accounts = latestCodes, pageMatches = latestPageCodes) {
       : otherCodes.length === 0 && !query
         ? "No other active Coffer codes."
         : "No codes match this search.",
+    { grouped: true },
   );
 }
 
@@ -304,6 +358,8 @@ function setAuthVisible(visible) {
 }
 
 function setVaultVisible(visible) {
+  lockButton.hidden = !visible;
+  lockButton.disabled = false;
   vaultTools.hidden = !visible;
   allCodesSection.hidden = !visible;
   if (!visible) {
@@ -412,10 +468,31 @@ connectionForm.addEventListener("submit", async (event) => {
   }
 });
 
+async function lockCoffer() {
+  lockButton.disabled = true;
+  try {
+    await browser.runtime.sendMessage({ type: "lock-coffer" });
+  } catch {
+    // The UI should still return to the locked state if the background wakes slowly.
+  }
+  latestCodes = [];
+  latestPageCodes = [];
+  searchInput.value = "";
+  passwordInput.value = "";
+  clearStatus();
+  setVaultVisible(false);
+  setAuthVisible(true);
+  renderCodes([]);
+}
+
 searchInput.addEventListener("input", () => renderCodes());
 
 openCofferButton.addEventListener("click", async () => {
   await browser.runtime.sendMessage({ type: "open-coffer" });
+});
+
+lockButton.addEventListener("click", () => {
+  void lockCoffer();
 });
 
 void refresh();

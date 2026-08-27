@@ -16,6 +16,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   width: 390px;
   min-height: 420px;
@@ -51,6 +55,10 @@ button {
   border-radius: 9px;
 }
 
+.popup-head > div {
+  min-width: 0;
+}
+
 .popup-head strong,
 .popup-head span {
   display: block;
@@ -66,6 +74,38 @@ button {
   font-size: 12px;
 }
 
+.lock-button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.lock-button:hover,
+.lock-button:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+  outline: none;
+}
+
+.lock-button svg {
+  width: 19px;
+  height: 19px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
 .connection-card,
 .status-card,
 .vault-tools,
@@ -79,14 +119,6 @@ button {
   display: grid;
   gap: 8px;
   padding: 9px 10px;
-}
-
-.auth-fields[hidden] {
-  display: none;
-}
-
-.vault-tools[hidden] {
-  display: none;
 }
 
 .connection-form {
@@ -195,7 +227,12 @@ input:focus {
 .vault-tools {
   display: block;
   border: 0;
-  background: transparent;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: -4px 0;
+  padding: 8px 0;
+  background: var(--paper);
 }
 
 .vault-tools input {
@@ -242,10 +279,6 @@ input:focus {
   overflow: hidden;
 }
 
-.page-codes[hidden] {
-  display: none;
-}
-
 .codes h2 {
   padding: 12px 12px 6px;
 }
@@ -264,6 +297,37 @@ input:focus {
   padding: 10px 12px;
   border: 0;
   background: var(--surface);
+}
+
+.code-category {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  background: #191b1d;
+  color: var(--muted);
+}
+
+.code-category span {
+  min-width: 0;
+  overflow: hidden;
+  color: #d5cfcb;
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.code-category small {
+  min-width: 20px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .code-logo {
