@@ -68,6 +68,16 @@ let brandCatalogCache = null;
 let brandCatalogOrigin = "";
 let brandCatalogPromise = null;
 
+function unexpectedErrorResponse(error, fallback = "Coffer could not complete this request.") {
+  return {
+    ok: false,
+    error: {
+      code: "unexpected_error",
+      message: error instanceof Error && error.message ? error.message : fallback,
+    },
+  };
+}
+
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1344,7 +1354,7 @@ async function openCoffer() {
   return { ok: true };
 }
 
-browser.runtime.onMessage.addListener((message) => {
+function handleMessage(message) {
   if (!isRecord(message) || typeof message.type !== "string") return false;
   if (message.type === "popup-state") return popupState();
   if (message.type === "save-settings") return saveSettings(message.settings);
@@ -1370,4 +1380,15 @@ browser.runtime.onMessage.addListener((message) => {
   }
   if (message.type === "open-coffer") return openCoffer();
   return false;
+}
+
+browser.runtime.onMessage.addListener((message) => {
+  try {
+    const response = handleMessage(message);
+    return response instanceof Promise
+      ? response.catch((error) => unexpectedErrorResponse(error))
+      : response;
+  } catch (error) {
+    return Promise.resolve(unexpectedErrorResponse(error));
+  }
 });

@@ -51,4 +51,4 @@ Build/review:
 - Runtime package: `npm run package:firefox`
 - Validation: `npm run lint`
 - The upload zip is generated under `dist/`.
-- Optional source package: `git archive --format=zip --output dist/coffer-extension-0.1.0-source.zip HEAD`
+- Optional source package: `VERSION=$(node -p "require('./package.json').version") && git archive --format=zip --output "dist/coffer-extension-${VERSION}-source.zip" HEAD`

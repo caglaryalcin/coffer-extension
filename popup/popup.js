@@ -66,8 +66,22 @@ function applyAccountIcon(logo, account) {
   logo.append(image);
 }
 
+function accountIconKey(account) {
+  return [
+    account.iconDataUrl || "",
+    account.iconUrl || "",
+    account.iconColor || "",
+    account.iconTitle || "",
+    account.service || "",
+  ].join("\u0000");
+}
+
 function errorMessage(response, fallback) {
   return response?.error?.message ?? fallback;
+}
+
+function caughtErrorMessage(error, fallback) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function normalizeCofferOrigin(value) {
@@ -105,17 +119,22 @@ async function saveCurrentOrigin(statusMessage = "Saving Coffer URL...") {
   return response.settings.cofferOrigin;
 }
 
-async function ensureCofferPermission(origin) {
+async function requestCofferPermission(origin) {
   const normalizedOrigin = normalizeCofferOrigin(origin);
   if (!normalizedOrigin) {
     setStatus("Enter a valid Coffer URL.", "warning");
     return false;
   }
   const origins = [originPermissionPattern(normalizedOrigin)];
-  if (await browser.permissions.contains({ origins })) return true;
-  const granted = await browser.permissions.request({ origins });
-  setStatus(granted ? "Coffer URL access granted." : "Permission was not granted.", granted ? "success" : "warning");
-  return granted;
+  try {
+    const granted = await browser.permissions.request({ origins });
+    setStatus(granted ? "Coffer URL access granted." : "Permission was not granted.", granted ? "success" : "warning");
+    return granted;
+  } catch (error) {
+    if (await browser.permissions.contains({ origins }).catch(() => false)) return true;
+    setStatus(`Firefox could not grant access to this Coffer URL: ${caughtErrorMessage(error, "Permission request failed.")}`, "warning");
+    return false;
+  }
 }
 
 function codeMatchesSearch(account, query) {
@@ -154,48 +173,101 @@ async function fillCode(account, button) {
   }
 }
 
+function createCodeRow() {
+  const row = document.createElement("div");
+  row.className = "code-row";
+
+  const logo = document.createElement("span");
+  logo.className = "code-logo";
+
+  const copy = document.createElement("div");
+  copy.className = "code-copy";
+  const service = document.createElement("strong");
+  const identity = document.createElement("span");
+  copy.append(service, identity);
+
+  const meta = document.createElement("div");
+  meta.className = "code-meta";
+  const code = document.createElement("span");
+  code.className = "code-value";
+  const remaining = document.createElement("span");
+  remaining.className = "code-remaining";
+  const fillButton = document.createElement("button");
+  fillButton.type = "button";
+  fillButton.className = "fill-button";
+  fillButton.textContent = "Fill";
+  meta.append(code, remaining, fillButton);
+
+  row.append(logo, copy, meta);
+  return row;
+}
+
+function setText(element, value) {
+  const text = String(value);
+  if (element.textContent !== text) element.textContent = text;
+}
+
+function updateCodeRow(row, account) {
+  const logo = row.querySelector(".code-logo");
+  const service = row.querySelector(".code-copy strong");
+  const identity = row.querySelector(".code-copy span");
+  const code = row.querySelector(".code-value");
+  const remaining = row.querySelector(".code-remaining");
+  const fillButton = row.querySelector(".fill-button");
+
+  const iconKey = accountIconKey(account);
+  if (logo && row.dataset.iconKey !== iconKey) {
+    applyAccountIcon(logo, account);
+    row.dataset.iconKey = iconKey;
+  }
+  if (service) setText(service, account.service);
+  if (identity) setText(identity, account.identity || account.group || "Coffer account");
+  if (code) setText(code, account.code);
+  if (remaining) {
+    remaining.className = account.remaining <= 5 ? "code-remaining expiring" : "code-remaining";
+    setText(remaining, `${account.remaining}s`);
+  }
+  if (fillButton) {
+    fillButton.onclick = () => fillCode(account, fillButton);
+    if (!fillButton.disabled && fillButton.textContent !== "Fill") fillButton.textContent = "Fill";
+  }
+}
+
 function renderCodeRows(container, accounts, emptyMessage) {
-  container.replaceChildren();
   if (accounts.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = emptyMessage;
-    container.append(empty);
+    const existingEmpty = container.firstElementChild;
+    if (
+      container.childElementCount === 1 &&
+      existingEmpty?.classList.contains("empty")
+    ) {
+      setText(existingEmpty, emptyMessage);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = emptyMessage;
+      container.replaceChildren(empty);
+    }
     return;
   }
 
+  const existingRows = new Map();
+  for (const child of container.children) {
+    if (child.classList.contains("code-row") && child.dataset.accountId) {
+      existingRows.set(child.dataset.accountId, child);
+    }
+  }
+
+  const activeRows = new Set();
   for (const account of accounts) {
-    const row = document.createElement("div");
-    row.className = "code-row";
-
-    const logo = document.createElement("span");
-    applyAccountIcon(logo, account);
-
-    const copy = document.createElement("div");
-    copy.className = "code-copy";
-    const service = document.createElement("strong");
-    service.textContent = account.service;
-    const identity = document.createElement("span");
-    identity.textContent = account.identity || account.group || "Coffer account";
-    copy.append(service, identity);
-
-    const meta = document.createElement("div");
-    meta.className = "code-meta";
-    const code = document.createElement("span");
-    code.className = "code-value";
-    code.textContent = account.code;
-    const remaining = document.createElement("span");
-    remaining.className = account.remaining <= 5 ? "code-remaining expiring" : "code-remaining";
-    remaining.textContent = `${account.remaining}s`;
-    const fillButton = document.createElement("button");
-    fillButton.type = "button";
-    fillButton.className = "fill-button";
-    fillButton.textContent = "Fill";
-    fillButton.addEventListener("click", () => fillCode(account, fillButton));
-    meta.append(code, remaining, fillButton);
-
-    row.append(logo, copy, meta);
+    const row = existingRows.get(account.id) ?? createCodeRow();
+    row.dataset.accountId = account.id;
+    activeRows.add(row);
+    updateCodeRow(row, account);
     container.append(row);
+  }
+
+  for (const child of [...container.children]) {
+    if (!activeRows.has(child)) child.remove();
   }
 }
 
@@ -297,17 +369,24 @@ connectionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const password = passwordInput.value;
   try {
-    const savedOrigin = await saveCurrentOrigin("Preparing Coffer...");
-    if (!savedOrigin) {
+    const normalizedOrigin = normalizeCofferOrigin(originInput.value);
+    if (!normalizedOrigin) {
+      setStatus("Enter a valid Coffer URL.", "warning");
       passwordInput.value = "";
       return;
     }
-    const hasPermission = await ensureCofferPermission(savedOrigin);
+    originInput.value = normalizedOrigin;
+    const hasPermission = await requestCofferPermission(normalizedOrigin);
     if (!hasPermission) {
       passwordInput.value = "";
       setAuthVisible(true);
       setVaultVisible(false);
       renderCodes([]);
+      return;
+    }
+    const savedOrigin = await saveCurrentOrigin("Preparing Coffer...");
+    if (!savedOrigin) {
+      passwordInput.value = "";
       return;
     }
     setStatus("Unlocking Coffer...");
@@ -326,9 +405,9 @@ connectionForm.addEventListener("submit", async (event) => {
       return;
     }
     applyVaultState(response.vault);
-  } catch {
+  } catch (error) {
     passwordInput.value = "";
-    setStatus("Coffer could not be unlocked.", "warning");
+    setStatus(caughtErrorMessage(error, "Coffer could not be unlocked."), "warning");
     setAuthVisible(true);
   }
 });

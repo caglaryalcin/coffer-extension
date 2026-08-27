@@ -13,7 +13,8 @@ Upload the generated zip from `dist/`.
 If AMO asks for a source archive, generate it from the exact release commit:
 
 ```sh
-git archive --format=zip --output dist/coffer-extension-0.1.0-source.zip HEAD
+VERSION=$(node -p "require('./package.json').version")
+git archive --format=zip --output "dist/coffer-extension-${VERSION}-source.zip" HEAD
 ```
 
 Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
@@ -45,7 +46,7 @@ export AMO_JWT_SECRET=<secret>
 
 npx web-ext sign --channel=listed \
   --amo-metadata=docs/amo-metadata.json \
-  --upload-source-code=dist/coffer-extension-0.1.0-source.zip \
+  --upload-source-code="dist/coffer-extension-${VERSION}-source.zip" \
   --api-key="$AMO_JWT_ISSUER" \
   --api-secret="$AMO_JWT_SECRET"
 ```
