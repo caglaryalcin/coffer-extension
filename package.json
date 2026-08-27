@@ -1,6 +1,6 @@
 {
   "name": "coffer-extension",
-  "version": "0.1.2",
+  "version": "1.0.0",
   "description": "Browser extension for securely filling Coffer TOTP codes.",
   "license": "GPL-3.0-only",
   "type": "module",
