@@ -16,11 +16,10 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "lint": "web-ext lint --source-dir . --self-hosted --ignore-files package.json package-lock.json README.md PRIVACY.md LICENSE THIRD_PARTY_NOTICES.md docs .github .git .gitignore test-pages node_modules dist web-ext-artifacts scripts",
-    "package:firefox": "web-ext build --source-dir . --artifacts-dir dist --overwrite-dest --ignore-files package.json package-lock.json README.md PRIVACY.md LICENSE THIRD_PARTY_NOTICES.md docs .github .git .gitignore test-pages node_modules dist web-ext-artifacts scripts",
+    "lint": "web-ext lint --source-dir . --self-hosted --ignore-files package.json package-lock.json README.md PRIVACY.md LICENSE THIRD_PARTY_NOTICES.md docs .github .git .gitignore node_modules dist web-ext-artifacts scripts",
+    "package:firefox": "web-ext build --source-dir . --artifacts-dir dist --overwrite-dest --ignore-files package.json package-lock.json README.md PRIVACY.md LICENSE THIRD_PARTY_NOTICES.md docs .github .git .gitignore node_modules dist web-ext-artifacts scripts",
     "package:chrome": "node scripts/build-chrome.mjs",
-    "package:all": "npm run package:firefox && npm run package:chrome",
-    "start:test-page": "python3 -m http.server 8787 --bind 127.0.0.1 --directory test-pages"
+    "package:all": "npm run package:firefox && npm run package:chrome"
   },
   "devDependencies": {
     "web-ext": "10.6.0"
