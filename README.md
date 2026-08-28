@@ -2,6 +2,10 @@
 
 This repository contains the Firefox and Chrome extension for Coffer. It works as a small Coffer client for TOTP codes.
 
+![🌐 Chrome Extension](https://chromewebstore.google.com/detail/coffer/ajekhlpjkcohkdedhkdjkadilecboimd)
+
+🌐 Firefox Extension (***Waiting review***...)
+
 ## Connection model
 
 - The extension connects directly to the configured Coffer API at `/api/vault`.
