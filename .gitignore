@@ -1,6 +1,5 @@
 node_modules/
 dist/
 web-ext-artifacts/
-screenshots/
 .DS_Store
 *.log
