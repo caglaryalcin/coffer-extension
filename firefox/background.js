@@ -5,6 +5,7 @@ import "./vendor/argon2.umd.min.js";
 
 const STORAGE_KEY = "cofferAutofillSettings";
 const BRAND_CATALOG_STORAGE_KEY = "cofferServiceBrandCatalogV1";
+const BRAND_CATALOG_CACHE_VERSION = 2;
 const DEFAULT_SETTINGS = {
   cofferOrigin: "http://localhost:3000",
 };
@@ -929,16 +930,19 @@ function addCompactSelfhstFamilies(catalog, families) {
   }
 }
 
+function isCompactServiceBrandCatalogPayload(payload) {
+  return isRecord(payload) &&
+    payload.format === SERVICE_BRAND_CATALOG_FORMAT &&
+    payload.version === 1 &&
+    Array.isArray(payload.core) &&
+    Array.isArray(payload.selfhst);
+}
+
 function parseServiceBrandCatalog(payload, cofferOrigin) {
   if (!isRecord(payload)) return emptyBrandCatalog();
 
   const catalog = emptyBrandCatalog();
-  if (
-    payload.format === SERVICE_BRAND_CATALOG_FORMAT &&
-    payload.version === 1 &&
-    Array.isArray(payload.core) &&
-    Array.isArray(payload.selfhst)
-  ) {
+  if (isCompactServiceBrandCatalogPayload(payload)) {
     addCoreCatalogBrands(catalog, payload.core, cofferOrigin);
     addCompactSelfhstFamilies(catalog, payload.selfhst);
     return catalog;
@@ -994,9 +998,10 @@ async function readStoredServiceBrandCatalog(cofferOrigin) {
     const entry = stored?.[BRAND_CATALOG_STORAGE_KEY];
     if (
       !isRecord(entry) ||
+      entry.cacheVersion !== BRAND_CATALOG_CACHE_VERSION ||
       entry.cofferOrigin !== cofferOrigin ||
       !Number.isFinite(entry.fetchedAt) ||
-      !isRecord(entry.payload)
+      !isCompactServiceBrandCatalogPayload(entry.payload)
     ) {
       return null;
     }
@@ -1008,8 +1013,10 @@ async function readStoredServiceBrandCatalog(cofferOrigin) {
 }
 
 async function storeServiceBrandCatalog(cofferOrigin, payload) {
+  if (!isCompactServiceBrandCatalogPayload(payload)) return;
   await browser.storage.local.set({
     [BRAND_CATALOG_STORAGE_KEY]: {
+      cacheVersion: BRAND_CATALOG_CACHE_VERSION,
       cofferOrigin,
       fetchedAt: Date.now(),
       payload,
@@ -1024,7 +1031,7 @@ async function fetchAndCacheServiceBrandCatalog(cofferOrigin) {
     const url = new URL("/api/service-brands", cofferOrigin);
     url.searchParams.set("format", "extension-v1");
     const response = await fetch(url.toString(), {
-      cache: "force-cache",
+      cache: "reload",
       credentials: "omit",
       method: "GET",
       signal: controller.signal,
