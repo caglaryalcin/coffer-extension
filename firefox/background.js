@@ -4,12 +4,16 @@ import "./browser-compat.js";
 import "./vendor/argon2.umd.min.js";
 
 const STORAGE_KEY = "cofferAutofillSettings";
+const BRAND_CATALOG_STORAGE_KEY = "cofferServiceBrandCatalogV1";
 const DEFAULT_SETTINGS = {
   cofferOrigin: "http://localhost:3000",
 };
 
 const VAULT_API_TIMEOUT_MS = 10_000;
 const SERVICE_BRANDS_TIMEOUT_MS = 5_000;
+const SERVICE_BRANDS_REFRESH_MS = 24 * 60 * 60 * 1_000;
+const SERVICE_BRANDS_RETRY_BASE_MS = 500;
+const SERVICE_BRANDS_RETRY_MAX_MS = 30_000;
 const DEFAULT_UNLOCK_MS = 20 * 60 * 1_000;
 const EXTENDED_UNLOCK_MS = 12 * 60 * 60 * 1_000;
 const MAX_PASSWORD_BYTES = 1_024;
@@ -31,12 +35,16 @@ const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const LOCAL_ICON_BRAND = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
 const SVG_BRAND_ASSET = /^[a-z0-9][a-z0-9_.-]{0,128}\.svg$/u;
+const SELFHST_REFERENCE = /^[a-z0-9][a-z0-9-]{0,49}$/u;
+const SELFHST_STEM = /^[a-z0-9][a-z0-9-]{0,55}$/u;
 const MAX_ACCOUNT_ICON_BYTES = 96 * 1024;
 const ACCOUNT_ICON_DATA_URL = /^data:image\/png;base64,[A-Za-z0-9+/]*={0,2}$/u;
 const UTF8 = new TextEncoder();
 const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true });
 const SUPPORTED_ALGORITHMS = new Set(["SHA-1", "SHA-256", "SHA-512"]);
 const COFFER_INITIALS_BRAND_ID = "coffer-initials";
+const SELFHST_ID_PREFIX = "selfhst-";
+const SERVICE_BRAND_CATALOG_FORMAT = "coffer-extension-service-brands";
 const GENERIC_HOST_LABELS = new Set([
   "account",
   "accounts",
@@ -63,11 +71,15 @@ const GENERIC_DOMAIN_LABELS = new Set([
   "net",
   "org",
 ]);
+const SERVICE_URL_PATTERN = /[a-z][a-z\d+.-]*:\/\/[^\s<>"'()[\]{}]+/giu;
+const SERVICE_DOMAIN_PATTERN = /(?:[a-z\d-]+\.)+[a-z]{2,}/giu;
 
 let activeSession = null;
 let brandCatalogCache = null;
 let brandCatalogOrigin = "";
 let brandCatalogPromise = null;
+let brandCatalogRetryAt = 0;
+let brandCatalogFailureCount = 0;
 
 function unexpectedErrorResponse(error, fallback = "Coffer could not complete this request.") {
   return {
@@ -174,6 +186,63 @@ function domainTokensFromText(value) {
   return [...new Set(tokens)];
 }
 
+function serviceDomainCandidates(value) {
+  const domains = [];
+  const urlRanges = [];
+  let match;
+
+  SERVICE_URL_PATTERN.lastIndex = 0;
+  while ((match = SERVICE_URL_PATTERN.exec(value)) !== null) {
+    urlRanges.push({ start: match.index, end: match.index + match[0].length });
+    try {
+      const parsed = new URL(match[0]);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        domains.push(parsed.hostname);
+      }
+    } catch {
+      // A malformed URL remains domain-like and must not become a name match.
+    }
+  }
+
+  SERVICE_DOMAIN_PATTERN.lastIndex = 0;
+  while ((match = SERVICE_DOMAIN_PATTERN.exec(value)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (urlRanges.some((range) => start >= range.start && end <= range.end)) continue;
+    if (value[start - 1] === "@" || value[end] === "@") continue;
+    domains.push(match[0]);
+  }
+
+  SERVICE_DOMAIN_PATTERN.lastIndex = 0;
+  const containsDomainLikeValue = urlRanges.length > 0 || SERVICE_DOMAIN_PATTERN.test(value);
+  SERVICE_DOMAIN_PATTERN.lastIndex = 0;
+  return {
+    domains: domains.map((domain) => domain.toLowerCase().replace(/^www\./u, "").replace(/\.$/u, "")),
+    containsDomainLikeValue,
+  };
+}
+
+function isDomainOrSubdomain(candidate, expected) {
+  return candidate === expected || candidate.endsWith(`.${expected}`);
+}
+
+function escapeRegularExpression(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function containsBoundedName(value, name) {
+  const phrase = escapeRegularExpression(name).replace(/\s+/gu, "\\s+");
+  const negated = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}.])(?:anti|fake|not|unofficial)[\\s_-]+${phrase}(?=$|[^\\p{L}\\p{N}.])`,
+    "iu",
+  );
+  if (negated.test(value)) return false;
+  return new RegExp(
+    `(?:^|[^\\p{L}\\p{N}.])${phrase}(?=$|[^\\p{L}\\p{N}.])`,
+    "iu",
+  ).test(value);
+}
+
 function accountPageTokens(account) {
   return new Set([
     ...textTokens(account.service),
@@ -232,6 +301,12 @@ async function saveSettings(input) {
   await browser.storage.local.set({ [STORAGE_KEY]: settings });
   if (previous.cofferOrigin !== cofferOrigin) {
     clearSession();
+    brandCatalogCache = null;
+    brandCatalogOrigin = "";
+    brandCatalogPromise = null;
+    brandCatalogRetryAt = 0;
+    brandCatalogFailureCount = 0;
+    await browser.storage.local.remove(BRAND_CATALOG_STORAGE_KEY).catch(() => {});
     await browser.permissions.remove({
       origins: [originPermissionPattern(previous.cofferOrigin)],
     }).catch(() => false);
@@ -755,54 +830,122 @@ function emptyBrandCatalog() {
     byId: new Map(),
     exactNameMatches: new Map(),
     foldedNameMatches: new Map(),
+    decoratedNameMatches: [],
+    domainMatches: [],
+    selfhstFamilies: new Map(),
   };
 }
 
-function addBrandMatch(matches, key, id) {
+function stringList(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+}
+
+function addBrandMatch(matches, key, id, preferred = false) {
   if (!key) return;
-  if (!matches.has(key)) {
+  if (preferred || !matches.has(key)) {
     matches.set(key, id);
   } else if (matches.get(key) !== id) {
     matches.set(key, null);
   }
 }
 
-function parseServiceBrandCatalog(payload, cofferOrigin) {
-  if (!isRecord(payload) || !Array.isArray(payload.brands)) return emptyBrandCatalog();
+function parseCoreCatalogBrand(item, cofferOrigin) {
+  const compact = Array.isArray(item);
+  const id = readLocalIconBrand(compact ? item[0] : item?.id);
+  const title = readText(compact ? item[1] : item?.title);
+  const colorValue = compact ? item[2] : item?.color;
+  const color = typeof colorValue === "string" && /^#[0-9a-f]{6}$/iu.test(colorValue)
+    ? colorValue
+    : "#202326";
+  const automatic = (compact ? item[3] : item?.automatic) === true;
+  const assetValue = compact ? `${id}.svg` : item?.asset;
+  const asset = typeof assetValue === "string" && SVG_BRAND_ASSET.test(assetValue)
+    ? assetValue
+    : null;
+  if (!id || !title || !asset || id === COFFER_INITIALS_BRAND_ID) return null;
 
-  const catalog = emptyBrandCatalog();
-  for (const item of payload.brands) {
-    if (!isRecord(item)) continue;
-    const id = readLocalIconBrand(item.id);
-    const title = readText(item.title);
-    const color = typeof item.color === "string" && /^#[0-9a-f]{6}$/iu.test(item.color)
-      ? item.color
-      : "#202326";
-    const asset = typeof item.asset === "string" && SVG_BRAND_ASSET.test(item.asset)
-      ? item.asset
-      : null;
-    if (!id || !title || !asset || id === COFFER_INITIALS_BRAND_ID) continue;
+  return {
+    asset,
+    automatic,
+    color,
+    decorated: (compact ? item[7] : item?.decorated) === true,
+    domains: stringList(compact ? item[6] : item?.domains),
+    iconUrl: new URL(`/brands/${asset}`, cofferOrigin).toString(),
+    id,
+    preferredSearchKeys: stringList(compact ? item[5] : item?.preferredSearchKeys),
+    searchKeys: stringList(compact ? item[4] : item?.searchKeys),
+    title,
+  };
+}
 
-    const brand = {
-      asset,
-      color,
-      iconUrl: new URL(`/brands/${asset}`, cofferOrigin).toString(),
-      id,
-      title,
-    };
-    catalog.byId.set(id, brand);
-
-    if (item.automatic !== true) continue;
-    const searchKeys = Array.isArray(item.searchKeys)
-      ? item.searchKeys.filter((value) => typeof value === "string")
-      : [];
-    for (const searchKey of [id, title, ...searchKeys]) {
+function addCoreCatalogBrands(catalog, items, cofferOrigin) {
+  const automaticBrands = [];
+  for (const item of items) {
+    const brand = parseCoreCatalogBrand(item, cofferOrigin);
+    if (!brand) continue;
+    catalog.byId.set(brand.id, brand);
+    if (!brand.automatic) continue;
+    automaticBrands.push(brand);
+    for (const searchKey of brand.searchKeys) {
       const normalized = normalizeMatchValue(searchKey);
-      addBrandMatch(catalog.exactNameMatches, normalized, id);
+      addBrandMatch(catalog.exactNameMatches, normalized, brand.id);
       const folded = foldedMatchValue(normalized);
-      if (folded.length >= 2) addBrandMatch(catalog.foldedNameMatches, folded, id);
+      if (folded.length >= 2) addBrandMatch(catalog.foldedNameMatches, folded, brand.id);
     }
   }
+
+  // Curated aliases intentionally override ambiguous generated aliases, matching the web UI.
+  for (const brand of automaticBrands) {
+    for (const searchKey of brand.preferredSearchKeys) {
+      const normalized = normalizeMatchValue(searchKey);
+      addBrandMatch(catalog.exactNameMatches, normalized, brand.id, true);
+      const folded = foldedMatchValue(normalized);
+      if (folded) addBrandMatch(catalog.foldedNameMatches, folded, brand.id, true);
+      if (brand.decorated && folded.length >= 3) {
+        catalog.decoratedNameMatches.push({ id: brand.id, name: normalized });
+      }
+    }
+    for (const domain of brand.domains) {
+      const normalized = domain.toLowerCase().replace(/^www\./u, "").replace(/\.$/u, "");
+      if (normalized) catalog.domainMatches.push({ domain: normalized, id: brand.id });
+    }
+  }
+  catalog.decoratedNameMatches.sort((left, right) => right.name.length - left.name.length);
+}
+
+function addCompactSelfhstFamilies(catalog, families) {
+  for (const family of families) {
+    if (!Array.isArray(family)) continue;
+    const reference = typeof family[0] === "string" && SELFHST_REFERENCE.test(family[0])
+      ? family[0]
+      : null;
+    const title = readText(family[1]);
+    const variantMask = Number.isInteger(family[2]) && family[2] >= 1 && family[2] <= 7
+      ? family[2]
+      : null;
+    if (reference && title && variantMask) {
+      catalog.selfhstFamilies.set(reference, { title, variantMask });
+    }
+  }
+}
+
+function parseServiceBrandCatalog(payload, cofferOrigin) {
+  if (!isRecord(payload)) return emptyBrandCatalog();
+
+  const catalog = emptyBrandCatalog();
+  if (
+    payload.format === SERVICE_BRAND_CATALOG_FORMAT &&
+    payload.version === 1 &&
+    Array.isArray(payload.core) &&
+    Array.isArray(payload.selfhst)
+  ) {
+    addCoreCatalogBrands(catalog, payload.core, cofferOrigin);
+    addCompactSelfhstFamilies(catalog, payload.selfhst);
+    return catalog;
+  }
+
+  if (!Array.isArray(payload.brands)) return catalog;
+  addCoreCatalogBrands(catalog, payload.brands, cofferOrigin);
   return catalog;
 }
 
@@ -813,45 +956,182 @@ async function serviceBrandCatalog(cofferOrigin) {
   if (brandCatalogOrigin !== cofferOrigin) {
     brandCatalogCache = null;
     brandCatalogPromise = null;
+    brandCatalogRetryAt = 0;
+    brandCatalogFailureCount = 0;
   }
   brandCatalogOrigin = cofferOrigin;
-  brandCatalogPromise = fetchServiceBrandCatalog(cofferOrigin)
-    .then((catalog) => {
-      if (catalog.byId.size > 0) brandCatalogCache = catalog;
-      return catalog;
-    })
-    .finally(() => {
-      brandCatalogPromise = null;
-    });
-  return brandCatalogPromise;
+  if (brandCatalogRetryAt > Date.now()) return emptyBrandCatalog();
+  const pending = loadServiceBrandCatalog(cofferOrigin);
+  brandCatalogPromise = pending;
+  void pending.then(() => {
+    if (brandCatalogPromise === pending) brandCatalogPromise = null;
+  }, () => {
+    if (brandCatalogPromise === pending) brandCatalogPromise = null;
+  });
+  return pending;
 }
 
-async function fetchServiceBrandCatalog(cofferOrigin) {
+async function loadServiceBrandCatalog(cofferOrigin) {
+  const cached = await readStoredServiceBrandCatalog(cofferOrigin);
+  if (brandCatalogOrigin !== cofferOrigin) return emptyBrandCatalog();
+  if (cached) {
+    brandCatalogCache = cached.catalog;
+    brandCatalogRetryAt = 0;
+    brandCatalogFailureCount = 0;
+    if (Date.now() - cached.fetchedAt >= SERVICE_BRANDS_REFRESH_MS) {
+      queueMicrotask(() => {
+        void fetchAndCacheServiceBrandCatalog(cofferOrigin);
+      });
+    }
+    return cached.catalog;
+  }
+  return await fetchAndCacheServiceBrandCatalog(cofferOrigin);
+}
+
+async function readStoredServiceBrandCatalog(cofferOrigin) {
+  try {
+    const stored = await browser.storage.local.get(BRAND_CATALOG_STORAGE_KEY);
+    const entry = stored?.[BRAND_CATALOG_STORAGE_KEY];
+    if (
+      !isRecord(entry) ||
+      entry.cofferOrigin !== cofferOrigin ||
+      !Number.isFinite(entry.fetchedAt) ||
+      !isRecord(entry.payload)
+    ) {
+      return null;
+    }
+    const catalog = parseServiceBrandCatalog(entry.payload, cofferOrigin);
+    return catalog.byId.size > 0 ? { catalog, fetchedAt: entry.fetchedAt } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function storeServiceBrandCatalog(cofferOrigin, payload) {
+  await browser.storage.local.set({
+    [BRAND_CATALOG_STORAGE_KEY]: {
+      cofferOrigin,
+      fetchedAt: Date.now(),
+      payload,
+    },
+  }).catch(() => {});
+}
+
+async function fetchAndCacheServiceBrandCatalog(cofferOrigin) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SERVICE_BRANDS_TIMEOUT_MS);
   try {
-    const response = await fetch(new URL("/api/service-brands", cofferOrigin).toString(), {
+    const url = new URL("/api/service-brands", cofferOrigin);
+    url.searchParams.set("format", "extension-v1");
+    const response = await fetch(url.toString(), {
       cache: "force-cache",
       credentials: "omit",
       method: "GET",
       signal: controller.signal,
     });
-    return response.ok
-      ? parseServiceBrandCatalog(await response.json(), cofferOrigin)
-      : emptyBrandCatalog();
+    if (!response.ok) {
+      recordBrandCatalogFailure(cofferOrigin);
+      return emptyBrandCatalog();
+    }
+    const payload = await response.json();
+    const catalog = parseServiceBrandCatalog(payload, cofferOrigin);
+    if (catalog.byId.size > 0 && brandCatalogOrigin === cofferOrigin) {
+      brandCatalogCache = catalog;
+      brandCatalogRetryAt = 0;
+      brandCatalogFailureCount = 0;
+      void storeServiceBrandCatalog(cofferOrigin, payload);
+    } else if (catalog.byId.size === 0) {
+      recordBrandCatalogFailure(cofferOrigin);
+    }
+    return catalog;
   } catch {
+    recordBrandCatalogFailure(cofferOrigin);
     return emptyBrandCatalog();
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function resolveServiceBrand(service, iconBrand, catalog) {
+function recordBrandCatalogFailure(cofferOrigin) {
+  if (brandCatalogOrigin !== cofferOrigin || brandCatalogCache) return;
+  brandCatalogFailureCount += 1;
+  brandCatalogRetryAt = Date.now() + Math.min(
+    SERVICE_BRANDS_RETRY_BASE_MS * (2 ** (brandCatalogFailureCount - 1)),
+    SERVICE_BRANDS_RETRY_MAX_MS,
+  );
+}
+
+function selfhstServiceBrand(iconBrand, service, catalog, cofferOrigin) {
+  if (!iconBrand.startsWith(SELFHST_ID_PREFIX)) return null;
+  const stem = iconBrand.slice(SELFHST_ID_PREFIX.length);
+  if (!SELFHST_STEM.test(stem)) return null;
+
+  const standardCandidate = { reference: stem, suffix: "", bit: 1 };
+  const variantCandidates = [];
+  for (const variant of [{ suffix: "-dark", bit: 2 }, { suffix: "-light", bit: 4 }]) {
+    if (stem.endsWith(variant.suffix)) {
+      variantCandidates.push({
+        reference: stem.slice(0, -variant.suffix.length),
+        suffix: variant.suffix,
+        bit: variant.bit,
+      });
+    }
+  }
+  const candidates = catalog.selfhstFamilies.size > 0
+    ? [standardCandidate, ...variantCandidates]
+    : [...variantCandidates, standardCandidate];
+
+  for (const candidate of candidates) {
+    if (!SELFHST_REFERENCE.test(candidate.reference)) continue;
+    const family = catalog.selfhstFamilies.get(candidate.reference);
+    if (catalog.selfhstFamilies.size > 0 && (!family || (family.variantMask & candidate.bit) === 0)) continue;
+    const asset = `${candidate.reference}-alt${candidate.suffix}.svg`;
+    if (!SVG_BRAND_ASSET.test(asset)) continue;
+    return {
+      asset,
+      color: candidate.suffix === "-light" ? "#202326" : "#f4f3ee",
+      iconUrl: new URL(`/brands/${asset}`, cofferOrigin).toString(),
+      id: iconBrand,
+      title: family?.title || service,
+    };
+  }
+  return null;
+}
+
+function explicitServiceBrand(service, iconBrand, catalog, cofferOrigin) {
+  if (!iconBrand || iconBrand === COFFER_INITIALS_BRAND_ID) return null;
+  const catalogBrand = catalog.byId.get(iconBrand);
+  if (catalogBrand) return catalogBrand;
+  const selfhstBrand = selfhstServiceBrand(iconBrand, service, catalog, cofferOrigin);
+  if (selfhstBrand) return selfhstBrand;
+  const asset = `${iconBrand}.svg`;
+  return SVG_BRAND_ASSET.test(asset)
+    ? {
+        asset,
+        color: "#202326",
+        iconUrl: new URL(`/brands/${asset}`, cofferOrigin).toString(),
+        id: iconBrand,
+        title: service,
+      }
+    : null;
+}
+
+function resolveServiceBrand(service, iconBrand, catalog, cofferOrigin) {
   if (iconBrand === COFFER_INITIALS_BRAND_ID) return null;
-  if (iconBrand && catalog.byId.has(iconBrand)) return catalog.byId.get(iconBrand);
+  if (iconBrand) return explicitServiceBrand(service, iconBrand, catalog, cofferOrigin);
 
   const normalized = normalizeMatchValue(service);
   if (!normalized) return null;
+
+  if (catalog.domainMatches.length > 0) {
+    const candidates = serviceDomainCandidates(normalized);
+    for (const candidate of candidates.domains) {
+      const match = catalog.domainMatches.find(({ domain }) => isDomainOrSubdomain(candidate, domain));
+      if (match) return catalog.byId.get(match.id) ?? null;
+    }
+    if (candidates.containsDomainLikeValue || normalized.includes("://")) return null;
+  }
+
   const directMatch = catalog.exactNameMatches.get(normalized);
   if (directMatch) return catalog.byId.get(directMatch) ?? null;
 
@@ -859,14 +1139,19 @@ function resolveServiceBrand(service, iconBrand, catalog) {
   const foldedMatch = catalog.foldedNameMatches.get(folded);
   if (foldedMatch) return catalog.byId.get(foldedMatch) ?? null;
 
-  for (const token of [...textTokens(service), ...domainTokensFromText(service)]) {
-    const tokenMatch = catalog.foldedNameMatches.get(token) ?? catalog.exactNameMatches.get(token);
-    if (tokenMatch) return catalog.byId.get(tokenMatch) ?? null;
+  const decorated = catalog.decoratedNameMatches.find(({ name }) => containsBoundedName(normalized, name));
+  if (decorated) return catalog.byId.get(decorated.id) ?? null;
+
+  if (catalog.domainMatches.length === 0) {
+    for (const token of [...textTokens(service), ...domainTokensFromText(service)]) {
+      const tokenMatch = catalog.foldedNameMatches.get(token) ?? catalog.exactNameMatches.get(token);
+      if (tokenMatch) return catalog.byId.get(tokenMatch) ?? null;
+    }
   }
   return null;
 }
 
-function accountIcon(account, catalog) {
+function accountIcon(account, catalog, cofferOrigin) {
   if (account.iconDataUrl) {
     return {
       iconColor: null,
@@ -875,7 +1160,7 @@ function accountIcon(account, catalog) {
       iconUrl: null,
     };
   }
-  const brand = resolveServiceBrand(account.service, account.iconBrand, catalog);
+  const brand = resolveServiceBrand(account.service, account.iconBrand, catalog, cofferOrigin);
   if (!brand) {
     return {
       iconColor: null,
@@ -974,7 +1259,8 @@ function sessionIsAvailable(settings) {
 }
 
 async function publicVaultState(settings = null) {
-  if (!activeSession) {
+  const session = activeSession;
+  if (!session) {
     return {
       ok: false,
       error: {
@@ -984,11 +1270,26 @@ async function publicVaultState(settings = null) {
     };
   }
   const now = Date.now();
-  const [catalog, page] = await Promise.all([
-    serviceBrandCatalog(activeSession.cofferOrigin),
-    currentPageContext(settings ?? { cofferOrigin: activeSession.cofferOrigin }),
-  ]);
-  const accounts = await Promise.all(activeSession.vault.accounts
+  const catalogOrigin = session.cofferOrigin;
+  void serviceBrandCatalog(catalogOrigin);
+  const page = await currentPageContext(settings ?? { cofferOrigin: catalogOrigin });
+  if (activeSession !== session || session.expiresAt <= Date.now()) {
+    if (activeSession === session) clearSession();
+    return {
+      ok: false,
+      error: {
+        code: "vault_locked",
+        message: "Sign in to Coffer from the extension to view codes.",
+      },
+    };
+  }
+  const catalog = brandCatalogOrigin === catalogOrigin && brandCatalogCache
+    ? brandCatalogCache
+    : emptyBrandCatalog();
+  const iconsPending = brandCatalogOrigin === catalogOrigin &&
+    brandCatalogCache === null &&
+    (brandCatalogPromise !== null || brandCatalogRetryAt > 0);
+  const accounts = await Promise.all(session.vault.accounts
     .filter((account) => !account.archived)
     .map(async (account) => {
       const rawCode = await generateTotp(
@@ -998,7 +1299,7 @@ async function publicVaultState(settings = null) {
         account.period,
         account.algorithm,
       );
-      const icon = accountIcon(account, catalog);
+      const icon = accountIcon(account, catalog, catalogOrigin);
       return {
         id: account.id,
         code: formatCode(rawCode),
@@ -1016,13 +1317,15 @@ async function publicVaultState(settings = null) {
   return {
     ok: true,
     accounts,
-    expiresAt: activeSession.expiresAt,
+    expiresAt: session.expiresAt,
+    iconsPending,
+    iconsRetryAt: iconsPending && brandCatalogPromise === null ? brandCatalogRetryAt : null,
     page,
     pageMatches,
-    profile: activeSession.vault.profile,
-    revision: activeSession.revision,
-    theme: activeSession.vault.settings.theme,
-    unlockedAt: activeSession.unlockedAt,
+    profile: session.vault.profile,
+    revision: session.revision,
+    theme: session.vault.settings.theme,
+    unlockedAt: session.unlockedAt,
   };
 }
 
@@ -1073,6 +1376,9 @@ async function unlockCoffer(credentials) {
     };
   }
 
+  // Start the public icon catalog in parallel with the authenticated unlock.
+  // Vault rendering never waits for this optional request.
+  void serviceBrandCatalog(settings.cofferOrigin);
   clearSession();
   const identifier = credentials.identifier.trim();
   const identified = await identifyVault(settings.cofferOrigin, identifier);
@@ -1353,6 +1659,16 @@ async function openCoffer() {
   return { ok: true };
 }
 
+async function sessionKeepalive() {
+  const settings = await readSettings();
+  const unlocked = sessionIsAvailable(settings);
+  return {
+    ok: true,
+    unlocked,
+    expiresAt: unlocked ? activeSession.expiresAt : null,
+  };
+}
+
 function handleMessage(message) {
   if (!isRecord(message) || typeof message.type !== "string") return false;
   if (message.type === "popup-state") return popupState();
@@ -1373,6 +1689,7 @@ function handleMessage(message) {
   if (message.type === "unlock-coffer") return unlockCoffer(message.credentials);
   if (message.type === "refresh-vault") return refreshVault();
   if (message.type === "fill-code") return fillCode(message.accountId);
+  if (message.type === "session-keepalive") return sessionKeepalive();
   if (message.type === "lock-coffer") {
     clearSession();
     return Promise.resolve({ ok: true });

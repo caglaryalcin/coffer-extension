@@ -3,6 +3,7 @@
 const originInput = document.querySelector("#coffer-origin");
 const connectionCard = document.querySelector("#connection-card");
 const connectionForm = document.querySelector("#connection-form");
+const unlockButton = connectionForm.querySelector(".unlock-button");
 const openCofferButton = document.querySelector("#open-coffer");
 const lockButton = document.querySelector("#lock-coffer");
 const privacyButton = document.querySelector("#toggle-privacy");
@@ -19,10 +20,21 @@ const allCodesSection = document.querySelector("#all-codes");
 const codesList = document.querySelector("#codes-list");
 
 const PRIVACY_STORAGE_KEY = "cofferPopupPrivacyMasked";
+const SESSION_KEEPALIVE_MS = 20_000;
 
 let latestCodes = [];
 let latestPageCodes = [];
 let usernamesMasked = true;
+let refreshPromise = null;
+let refreshQueued = false;
+let uiEpoch = 0;
+let iconRefreshTimer = null;
+let iconRefreshDelay = 350;
+let lastVaultTickSeconds = 0;
+let vaultExpiresAt = 0;
+let unlockPending = false;
+let totpRefreshPending = false;
+const iconRetryCounts = new Map();
 const rowAccountIds = new WeakMap();
 
 function setStatus(message, tone = "") {
@@ -59,15 +71,30 @@ function applyAccountIcon(logo, account) {
   const image = document.createElement("img");
   image.alt = "";
   image.decoding = "async";
+  image.loading = "lazy";
+  image.referrerPolicy = "no-referrer";
   image.src = src;
   logo.classList.add("has-icon");
   if (account.iconColor) logo.style.backgroundColor = account.iconColor;
   if (account.iconTitle) logo.title = account.iconTitle;
+  image.addEventListener("load", () => {
+    iconRetryCounts.delete(src);
+  }, { once: true });
   image.addEventListener("error", () => {
     logo.className = "code-logo";
     logo.style.backgroundColor = "";
     logo.title = "";
     logo.replaceChildren(document.createTextNode(initials(account.service)));
+    const retries = iconRetryCounts.get(src) ?? 0;
+    if (retries < 1) {
+      iconRetryCounts.set(src, retries + 1);
+      const failedKey = accountIconKey(account);
+      window.setTimeout(() => {
+        const row = logo.closest(".code-row");
+        if (row?.dataset.iconKey === failedKey) delete row.dataset.iconKey;
+        renderCodes();
+      }, 750);
+    }
   }, { once: true });
   logo.append(image);
 }
@@ -420,15 +447,40 @@ function setVaultVisible(visible) {
   vaultTools.hidden = !visible;
   allCodesSection.hidden = !visible;
   if (!visible) {
+    if (iconRefreshTimer !== null) window.clearTimeout(iconRefreshTimer);
+    iconRefreshTimer = null;
+    iconRefreshDelay = 350;
+    lastVaultTickSeconds = 0;
+    vaultExpiresAt = 0;
+    totpRefreshPending = false;
     pageCodesSection.hidden = true;
     pageCodesList.replaceChildren();
     codesList.replaceChildren();
   }
 }
 
+function scheduleIconRefresh(pending, retryAt = null) {
+  if (iconRefreshTimer !== null) window.clearTimeout(iconRefreshTimer);
+  iconRefreshTimer = null;
+  if (!pending) {
+    iconRefreshDelay = 350;
+    return;
+  }
+  const retryDelay = Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : 0;
+  const delay = Math.max(iconRefreshDelay, retryDelay);
+  iconRefreshTimer = window.setTimeout(() => {
+    iconRefreshTimer = null;
+    iconRefreshDelay = Math.min(iconRefreshDelay * 2, 2_000);
+    void refresh();
+  }, delay);
+}
+
 function applyVaultState(vault, warning = "") {
   latestCodes = vault?.accounts ?? [];
   latestPageCodes = vault?.pageMatches ?? [];
+  lastVaultTickSeconds = Math.floor(Date.now() / 1_000);
+  vaultExpiresAt = Number.isFinite(vault?.expiresAt) ? vault.expiresAt : 0;
+  totpRefreshPending = false;
   setAuthVisible(false);
   setVaultVisible(true);
   if (warning) {
@@ -437,11 +489,13 @@ function applyVaultState(vault, warning = "") {
     clearStatus();
   }
   renderCodes(latestCodes, latestPageCodes);
+  scheduleIconRefresh(vault?.iconsPending === true, vault?.iconsRetryAt);
 }
 
-async function refresh() {
+async function performRefresh(epoch) {
   try {
     const state = await browser.runtime.sendMessage({ type: "popup-state" });
+    if (epoch !== uiEpoch) return;
     originInput.value = state?.settings?.cofferOrigin ?? "";
     const warning = state?.insecureOrigin
       ? "This Coffer URL uses plain HTTP. Use HTTPS outside localhost."
@@ -469,6 +523,7 @@ async function refresh() {
 
     applyVaultState(state.coffer, warning);
   } catch {
+    if (epoch !== uiEpoch) return;
     setAuthVisible(true);
     setVaultVisible(false);
     latestCodes = [];
@@ -478,8 +533,31 @@ async function refresh() {
   }
 }
 
+function refresh({ force = false } = {}) {
+  if (refreshPromise) {
+    if (force) refreshQueued = true;
+    return refreshPromise;
+  }
+  const epoch = uiEpoch;
+  refreshPromise = performRefresh(epoch).finally(() => {
+    refreshPromise = null;
+    if (refreshQueued) {
+      refreshQueued = false;
+      void refresh();
+    }
+  });
+  return refreshPromise;
+}
+
+function setUnlockPending(pending) {
+  unlockPending = pending;
+  unlockButton.disabled = pending;
+}
+
 connectionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (unlockPending) return;
+  setUnlockPending(true);
   const password = passwordInput.value;
   try {
     const normalizedOrigin = normalizeCofferOrigin(originInput.value);
@@ -522,16 +600,15 @@ connectionForm.addEventListener("submit", async (event) => {
     passwordInput.value = "";
     setStatus(caughtErrorMessage(error, "Coffer could not be unlocked."), "warning");
     setAuthVisible(true);
+  } finally {
+    setUnlockPending(false);
   }
 });
 
 async function lockCoffer() {
+  uiEpoch += 1;
+  refreshQueued = false;
   lockButton.disabled = true;
-  try {
-    await browser.runtime.sendMessage({ type: "lock-coffer" });
-  } catch {
-    // The UI should still return to the locked state if the background wakes slowly.
-  }
   latestCodes = [];
   latestPageCodes = [];
   searchInput.value = "";
@@ -540,6 +617,11 @@ async function lockCoffer() {
   setVaultVisible(false);
   setAuthVisible(true);
   renderCodes([]);
+  try {
+    await browser.runtime.sendMessage({ type: "lock-coffer" });
+  } catch {
+    // The UI should still return to the locked state if the background wakes slowly.
+  }
 }
 
 searchInput.addEventListener("input", () => renderCodes());
@@ -565,7 +647,64 @@ async function initialize() {
   await refresh();
 }
 
+function tickCodes() {
+  if (vaultTools.hidden) return;
+  if (vaultExpiresAt > 0 && Date.now() >= vaultExpiresAt) {
+    vaultExpiresAt = 0;
+    void lockCoffer();
+    return;
+  }
+  if (latestCodes.length === 0) return;
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  if (lastVaultTickSeconds === 0) {
+    lastVaultTickSeconds = nowSeconds;
+    return;
+  }
+  const elapsed = nowSeconds - lastVaultTickSeconds;
+  if (elapsed <= 0) return;
+  lastVaultTickSeconds = nowSeconds;
+
+  if (latestCodes.some((account) => account.remaining <= elapsed)) {
+    if (totpRefreshPending) return;
+    totpRefreshPending = true;
+    uiEpoch += 1;
+    const expiredById = new Map();
+    latestCodes = latestCodes.map((account) => {
+      const expired = { ...account, code: "••• •••", rawCode: "", remaining: 0 };
+      expiredById.set(expired.id, expired);
+      return expired;
+    });
+    latestPageCodes = latestPageCodes.map((account) => expiredById.get(account.id) ?? account);
+    renderCodes(latestCodes, latestPageCodes);
+    void refresh({ force: true });
+    return;
+  }
+
+  const updatedById = new Map();
+  latestCodes = latestCodes.map((account) => {
+    const updated = { ...account, remaining: account.remaining - elapsed };
+    updatedById.set(updated.id, updated);
+    return updated;
+  });
+  latestPageCodes = latestPageCodes.map((account) => updatedById.get(account.id) ?? account);
+  renderCodes(latestCodes, latestPageCodes);
+}
+
+async function keepSessionAlive() {
+  if (vaultTools.hidden) return;
+  try {
+    const state = await browser.runtime.sendMessage({ type: "session-keepalive" });
+    if (!state?.unlocked) {
+      vaultExpiresAt = 0;
+      await lockCoffer();
+      return;
+    }
+    if (Number.isFinite(state.expiresAt)) vaultExpiresAt = state.expiresAt;
+  } catch {
+    // A transient worker wake-up failure should not erase the visible vault.
+  }
+}
+
 void initialize();
-window.setInterval(() => {
-  if (!vaultTools.hidden) void refresh();
-}, 1_000);
+window.setInterval(tickCodes, 1_000);
+window.setInterval(() => void keepSessionAlive(), SESSION_KEEPALIVE_MS);
