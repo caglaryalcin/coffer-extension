@@ -66,8 +66,7 @@ npm run package:all
 ```
 
 The build clears old artifacts, validates both source trees, and writes
-`dist/coffer-<version>-firefox.zip` and `dist/coffer-<version>-chrome.zip`
-(currently `coffer-1.1.0-firefox.zip` and `coffer-1.1.0-chrome.zip`).
+`dist/coffer-<version>-firefox.zip` and `dist/coffer-<version>-chrome.zip`.
 
 AMO listing text, reviewer notes, and permission rationale are in `docs/`.
 

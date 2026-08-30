@@ -50,5 +50,5 @@ Third-party library:
 Build/review:
 - Runtime package: `npm run package:firefox`
 - Validation: `npm run lint`
-- The upload zip is generated as `dist/coffer-<version>-firefox.zip` (for example, `dist/coffer-1.1.0-firefox.zip`).
+- The upload zip is generated as `dist/coffer-<version>-firefox.zip`.
 - Optional source package (PowerShell): `$version = node -p "require('./package.json').version"; git archive --format=zip --output "dist/coffer-extension-$version-source.zip" HEAD`

@@ -9,8 +9,7 @@ npm run lint
 npm run package:firefox
 ```
 
-Upload `dist/coffer-<version>-firefox.zip` (for example,
-`dist/coffer-1.1.0-firefox.zip`).
+Upload `dist/coffer-<version>-firefox.zip`.
 
 If AMO asks for a source archive, generate it from the exact release commit:
 
