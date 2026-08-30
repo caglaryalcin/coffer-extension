@@ -2,7 +2,7 @@
 
 Coffer browser extension does not collect analytics, telemetry, or advertising data.
 
-The extension stores only the configured Coffer server URL in browser extension storage. It does not store the Coffer password, decrypted vault data, TOTP secrets, or generated one-time codes.
+The extension stores only the configured Coffer server URL and a boolean popup privacy preference in browser extension storage. It does not store the Coffer password, decrypted vault data, TOTP secrets, or generated one-time codes.
 
 When you sign in, the extension sends your account identifier and a password-derived authentication proof to the Coffer server URL you configured. The server returns the encrypted vault payload, which is decrypted locally inside the extension. TOTP codes are generated locally and are not written to extension storage or the clipboard.
 

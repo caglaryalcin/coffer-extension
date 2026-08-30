@@ -15,6 +15,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - After sign-in, the popup shows every active TOTP code in the encrypted vault.
 - Public service icon metadata is loaded from `/api/service-brands`; custom account icons come from the decrypted vault payload.
 - Codes can be filled from the popup without writing them to the clipboard.
+- The popup starts with usernames masked and can reveal or mask them with its eye button; TOTP codes remain visible.
 
 ## Security model
 
@@ -23,7 +24,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - The password is used for one unlock attempt and is not stored.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
 - Chrome may unload the Manifest V3 service worker and clear the in-memory unlock state sooner than Firefox.
-- Extension storage keeps only the configured Coffer URL.
+- Extension storage keeps only the configured Coffer URL and the popup privacy preference.
 - OTP codes are generated locally and are not written to extension storage.
 - The extension reads only the active tab URL while the popup is open, so page-specific codes can be shown first.
 - A short page script is injected only after **Fill** is clicked; it receives the current TOTP code and writes it to a likely one-time-code field.
@@ -37,45 +38,43 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on**.
-3. Select `manifest.json`.
+3. Select `firefox/manifest.json`.
 4. Open the extension popup and enter the Coffer URL.
 5. Click **Unlock** to save the URL, grant access if needed, and view/fill codes.
 
 ### Chrome
 
-1. Run `npm run package:chrome`.
-2. Open `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select `dist/chrome-source`.
-6. Open the extension popup and enter the Coffer URL.
-7. Click **Unlock** to save the URL, grant access if needed, and view/fill codes.
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select `chrome/`.
+5. Open the extension popup and enter the Coffer URL.
+6. Click **Unlock** to save the URL, grant access if needed, and view/fill codes.
+
+## Source Layout
+
+- `firefox/` is a complete Firefox extension source tree.
+- `chrome/` is a complete Chrome extension source tree.
+- Runtime files are duplicated intentionally so either directory can be loaded or packaged independently.
+- `npm run verify:sources` checks that shared runtime files remain identical and that each manifest keeps the correct browser-specific background configuration.
 
 ## Build Package
 
 ```sh
 npm ci
-npm run lint
-npm run package:firefox
-npm run package:chrome
+npm run package:all
 ```
 
-The Firefox upload zip and Chrome upload zip are written to `dist/`.
+The build clears old artifacts, validates both source trees, and writes
+`dist/coffer-<version>-firefox.zip` and `dist/coffer-<version>-chrome.zip`
+(currently `coffer-1.1.0-firefox.zip` and `coffer-1.1.0-chrome.zip`).
 
 AMO listing text, reviewer notes, and permission rationale are in `docs/`.
 
 ## Server notes
 
-Production/self-hosted Coffer does not need a per-browser extension UUID in
-server configuration. Use HTTPS for non-localhost Coffer URLs.
-
-Next.js development servers can reject unknown cross-origin requests. If local
-development blocks a temporary browser extension, copy the popup/background
-URL host from the browser extension debug page and start Coffer with:
-
-```sh
-COFFER_ALLOWED_DEV_ORIGINS=<extension-uuid> npm run dev
-```
+Local development, production, and self-hosted Coffer accept Firefox and Chrome
+extension origins directly. Use HTTPS for non-localhost Coffer URLs.
 
 The vault API route grants browser extensions access only to `identify` and
 `login`; all vault mutations stay same-origin only.

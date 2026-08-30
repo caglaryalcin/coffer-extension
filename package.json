@@ -1,6 +1,6 @@
 {
   "name": "coffer-extension",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Browser extension for securely filling Coffer TOTP codes.",
   "license": "GPL-3.0-only",
   "type": "module",
@@ -16,10 +16,14 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "lint": "web-ext lint --source-dir . --self-hosted --ignore-files package.json package-lock.json README.md PRIVACY.md LICENSE THIRD_PARTY_NOTICES.md docs .github .git .gitignore node_modules dist web-ext-artifacts scripts",
-    "package:firefox": "web-ext build --source-dir . --artifacts-dir dist --overwrite-dest --ignore-files package.json package-lock.json README.md PRIVACY.md LICENSE THIRD_PARTY_NOTICES.md docs .github .git .gitignore node_modules dist web-ext-artifacts scripts",
-    "package:chrome": "node scripts/build-chrome.mjs",
-    "package:all": "npm run package:firefox && npm run package:chrome"
+    "verify:sources": "node scripts/verify-sources.mjs",
+    "lint:firefox": "web-ext lint --source-dir firefox --self-hosted --warnings-as-errors",
+    "lint:chrome": "node --check chrome/background.js && node --check chrome/browser-compat.js && node --check chrome/popup/popup.js",
+    "lint": "npm run verify:sources && npm run lint:firefox && npm run lint:chrome",
+    "clean:dist": "node scripts/clean-dist.mjs",
+    "package:firefox": "web-ext build --source-dir firefox --artifacts-dir dist --filename coffer-{version}-firefox.zip --overwrite-dest --no-input",
+    "package:chrome": "web-ext build --source-dir chrome --artifacts-dir dist --filename coffer-{version}-chrome.zip --overwrite-dest --no-input",
+    "package:all": "npm run clean:dist && npm run lint && npm run package:firefox && npm run package:chrome"
   },
   "devDependencies": {
     "web-ext": "10.6.0"

@@ -720,9 +720,7 @@ async function requestVault(cofferOrigin, body) {
         ok: false,
         error: {
           code: "invalid_response",
-          message: response.status === 403
-            ? "Coffer blocked this extension origin. Restart local Coffer with the current browser extension UUID."
-            : "The Coffer API returned a non-JSON response.",
+          message: "The Coffer API returned a non-JSON response.",
         },
       };
     }

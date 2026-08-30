@@ -5,6 +5,7 @@ const connectionCard = document.querySelector("#connection-card");
 const connectionForm = document.querySelector("#connection-form");
 const openCofferButton = document.querySelector("#open-coffer");
 const lockButton = document.querySelector("#lock-coffer");
+const privacyButton = document.querySelector("#toggle-privacy");
 const statusBox = document.querySelector("#status");
 const authCard = document.querySelector("#auth-card");
 const emailInput = document.querySelector("#coffer-email");
@@ -17,8 +18,12 @@ const pageCodesList = document.querySelector("#page-codes-list");
 const allCodesSection = document.querySelector("#all-codes");
 const codesList = document.querySelector("#codes-list");
 
+const PRIVACY_STORAGE_KEY = "cofferPopupPrivacyMasked";
+
 let latestCodes = [];
 let latestPageCodes = [];
+let usernamesMasked = true;
+const rowAccountIds = new WeakMap();
 
 function setStatus(message, tone = "") {
   statusBox.hidden = false;
@@ -140,14 +145,25 @@ async function requestCofferPermission(origin) {
 
 function codeMatchesSearch(account, query) {
   if (!query) return true;
-  const haystack = [
+  const haystack = (usernamesMasked
+    ? [account.service, account.group, account.rawCode, account.code]
+    : [account.service, account.identity, account.group, account.rawCode, account.code]
+  ).join(" ").toLocaleLowerCase("en");
+  return haystack.includes(query);
+}
+
+function searchRevealsUsername(value) {
+  const query = String(value).trim().toLocaleLowerCase("en");
+  if (!query) return false;
+  const matchesVisibleField = latestCodes.some((account) => [
     account.service,
-    account.identity,
     account.group,
     account.rawCode,
     account.code,
-  ].join(" ").toLocaleLowerCase("en");
-  return haystack.includes(query);
+  ].join(" ").toLocaleLowerCase("en").includes(query));
+  if (matchesVisibleField) return false;
+  return latestCodes.some((account) => String(account.identity || "")
+    .toLocaleLowerCase("en").includes(query));
 }
 
 function categoryLabel(account) {
@@ -189,6 +205,7 @@ function createCodeRow() {
   copy.className = "code-copy";
   const service = document.createElement("strong");
   const identity = document.createElement("span");
+  identity.className = "code-identity";
   copy.append(service, identity);
 
   const meta = document.createElement("div");
@@ -221,6 +238,42 @@ function setText(element, value) {
   if (element.textContent !== text) element.textContent = text;
 }
 
+function setUsernameText(element, value) {
+  if (!element) return;
+  if (!usernamesMasked) {
+    delete element.dataset.usernameMasked;
+    setText(element, value);
+    return;
+  }
+  if (element.dataset.usernameMasked === "true") return;
+
+  const visualMask = document.createElement("span");
+  visualMask.className = "privacy-mask";
+  visualMask.setAttribute("aria-hidden", "true");
+  visualMask.textContent = "••••••••";
+  const accessibleLabel = document.createElement("span");
+  accessibleLabel.className = "visually-hidden";
+  accessibleLabel.textContent = "Username hidden";
+  element.replaceChildren(visualMask, accessibleLabel);
+  element.dataset.usernameMasked = "true";
+}
+
+function updatePrivacyButton() {
+  const action = usernamesMasked ? "Show usernames" : "Hide usernames";
+  privacyButton.setAttribute("aria-pressed", String(usernamesMasked));
+  privacyButton.title = action;
+}
+
+async function loadPrivacyPreference() {
+  try {
+    const stored = await browser.storage.local.get(PRIVACY_STORAGE_KEY);
+    usernamesMasked = stored?.[PRIVACY_STORAGE_KEY] !== false;
+  } catch {
+    usernamesMasked = true;
+  }
+  updatePrivacyButton();
+}
+
 function updateCategoryHeader(header, label, count) {
   const title = header.querySelector("span");
   const counter = header.querySelector("small");
@@ -231,7 +284,7 @@ function updateCategoryHeader(header, label, count) {
 function updateCodeRow(row, account) {
   const logo = row.querySelector(".code-logo");
   const service = row.querySelector(".code-copy strong");
-  const identity = row.querySelector(".code-copy span");
+  const identity = row.querySelector(".code-identity");
   const code = row.querySelector(".code-value");
   const remaining = row.querySelector(".code-remaining");
   const fillButton = row.querySelector(".fill-button");
@@ -242,7 +295,7 @@ function updateCodeRow(row, account) {
     row.dataset.iconKey = iconKey;
   }
   if (service) setText(service, account.service);
-  if (identity) setText(identity, account.identity || account.group || "Coffer account");
+  setUsernameText(identity, account.identity || account.group || "Coffer account");
   if (code) setText(code, account.code);
   if (remaining) {
     remaining.className = account.remaining <= 5 ? "code-remaining expiring" : "code-remaining";
@@ -290,8 +343,9 @@ function renderCodeRows(container, accounts, emptyMessage, { grouped = false } =
   const existingRows = new Map();
   const existingHeaders = new Map();
   for (const child of container.children) {
-    if (child.classList.contains("code-row") && child.dataset.accountId) {
-      existingRows.set(child.dataset.accountId, child);
+    const accountId = rowAccountIds.get(child);
+    if (child.classList.contains("code-row") && accountId) {
+      existingRows.set(accountId, child);
     } else if (child.classList.contains("code-category") && child.dataset.category) {
       existingHeaders.set(child.dataset.category, child);
     }
@@ -299,8 +353,9 @@ function renderCodeRows(container, accounts, emptyMessage, { grouped = false } =
 
   const activeElements = new Set();
   const renderAccount = (account) => {
-    const row = existingRows.get(account.id) ?? createCodeRow();
-    row.dataset.accountId = account.id;
+    const accountId = String(account.id);
+    const row = existingRows.get(accountId) ?? createCodeRow();
+    rowAccountIds.set(row, accountId);
     activeElements.add(row);
     updateCodeRow(row, account);
     container.append(row);
@@ -360,6 +415,8 @@ function setAuthVisible(visible) {
 function setVaultVisible(visible) {
   lockButton.hidden = !visible;
   lockButton.disabled = false;
+  privacyButton.hidden = !visible;
+  privacyButton.disabled = false;
   vaultTools.hidden = !visible;
   allCodesSection.hidden = !visible;
   if (!visible) {
@@ -495,7 +552,20 @@ lockButton.addEventListener("click", () => {
   void lockCoffer();
 });
 
-void refresh();
+privacyButton.addEventListener("click", () => {
+  usernamesMasked = !usernamesMasked;
+  if (usernamesMasked && searchRevealsUsername(searchInput.value)) searchInput.value = "";
+  updatePrivacyButton();
+  renderCodes();
+  void browser.storage.local.set({ [PRIVACY_STORAGE_KEY]: usernamesMasked }).catch(() => {});
+});
+
+async function initialize() {
+  await loadPrivacyPreference();
+  await refresh();
+}
+
+void initialize();
 window.setInterval(() => {
   if (!vaultTools.hidden) void refresh();
 }, 1_000);

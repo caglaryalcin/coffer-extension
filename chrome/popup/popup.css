@@ -21,7 +21,7 @@
 }
 
 body {
-  width: 390px;
+  width: 460px;
   min-height: 420px;
   margin: 0;
   background: var(--paper);
@@ -55,7 +55,7 @@ button {
   border-radius: 9px;
 }
 
-.popup-head > div {
+.brand-copy {
   min-width: 0;
 }
 
@@ -74,12 +74,17 @@ button {
   font-size: 12px;
 }
 
-.lock-button {
+.header-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.header-button {
   width: 34px;
   height: 34px;
   display: grid;
   place-items: center;
-  margin-left: auto;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -88,14 +93,14 @@ button {
   cursor: pointer;
 }
 
-.lock-button:hover,
-.lock-button:focus-visible {
+.header-button:hover,
+.header-button:focus-visible {
   border-color: var(--accent);
   background: var(--surface-hover);
   outline: none;
 }
 
-.lock-button svg {
+.header-button svg {
   width: 19px;
   height: 19px;
   display: block;
@@ -104,6 +109,10 @@ button {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2.2;
+}
+
+.privacy-button[aria-pressed="false"] .privacy-slash {
+  display: none;
 }
 
 .connection-card,
@@ -359,7 +368,7 @@ input:focus {
 }
 
 .code-copy strong,
-.code-copy span {
+.code-identity {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -371,7 +380,7 @@ input:focus {
   font-size: 14px;
 }
 
-.code-copy span {
+.code-identity {
   color: var(--muted);
   font-size: 12px;
 }
@@ -419,6 +428,19 @@ input:focus {
   padding: 18px 12px;
   color: var(--muted);
   text-align: center;
+}
+
+.visually-hidden {
+  width: 1px;
+  height: 1px;
+  position: absolute;
+  overflow: hidden;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 button:disabled {

@@ -10,16 +10,25 @@
     <main class="popup-shell">
       <header class="popup-head">
         <img src="../icons/coffer-favicon-32.png" width="32" height="32" alt="">
-        <div>
+        <div class="brand-copy">
           <strong>Coffer</strong>
           <span>Codes</span>
         </div>
-        <button type="button" class="lock-button" id="lock-coffer" aria-label="Lock Coffer" title="Lock Coffer" hidden>
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <rect x="4" y="11" width="16" height="9" rx="2"></rect>
-            <path d="M8 11V8a4 4 0 0 1 8 0v3"></path>
-          </svg>
-        </button>
+        <div class="header-actions">
+          <button type="button" class="header-button privacy-button" id="toggle-privacy" aria-label="Mask usernames" aria-pressed="true" aria-controls="page-codes-list codes-list" title="Show usernames" hidden>
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+              <circle cx="12" cy="12" r="2.5"></circle>
+              <path class="privacy-slash" d="M4 4l16 16"></path>
+            </svg>
+          </button>
+          <button type="button" class="header-button lock-button" id="lock-coffer" aria-label="Lock Coffer" title="Lock Coffer" hidden>
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <rect x="4" y="11" width="16" height="9" rx="2"></rect>
+              <path d="M8 11V8a4 4 0 0 1 8 0v3"></path>
+            </svg>
+          </button>
+        </div>
       </header>
 
       <section class="connection-card" id="connection-card" aria-label="Coffer URL">

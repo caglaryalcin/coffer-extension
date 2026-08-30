@@ -33,7 +33,7 @@ This extension is a companion client for a user-configured self-hosted Coffer se
 
 Data handling:
 - No telemetry, analytics, advertising, or third-party tracking.
-- The configured Coffer URL is the only value stored in Firefox extension storage.
+- Firefox extension storage contains only the configured Coffer URL and a boolean popup privacy preference.
 - The Coffer password is used for one unlock attempt and is not stored.
 - Decrypted vault data, TOTP secrets, and WebCrypto key handles stay in extension background memory only.
 - Generated TOTP codes are not written to extension storage or the clipboard.
@@ -50,5 +50,5 @@ Third-party library:
 Build/review:
 - Runtime package: `npm run package:firefox`
 - Validation: `npm run lint`
-- The upload zip is generated under `dist/`.
-- Optional source package: `VERSION=$(node -p "require('./package.json').version") && git archive --format=zip --output "dist/coffer-extension-${VERSION}-source.zip" HEAD`
+- The upload zip is generated as `dist/coffer-<version>-firefox.zip` (for example, `dist/coffer-1.1.0-firefox.zip`).
+- Optional source package (PowerShell): `$version = node -p "require('./package.json').version"; git archive --format=zip --output "dist/coffer-extension-$version-source.zip" HEAD`

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Coffer",
+  "version": "1.1.0",
+  "description": "Secure TOTP codes for a self-hosted Coffer vault.",
+  "icons": {
+    "16": "icons/coffer-favicon-16.png",
+    "32": "icons/coffer-favicon-32.png",
+    "48": "icons/coffer-mark-48.png",
+    "128": "icons/coffer-mark-128.png"
+  },
+  "action": {
+    "default_title": "Coffer",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/coffer-favicon-16.png",
+      "32": "icons/coffer-favicon-32.png",
+      "48": "icons/coffer-mark-48.png",
+      "128": "icons/coffer-mark-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; img-src 'self' data: http: https:;"
+  }
+}

@@ -2,26 +2,28 @@
 
 Build the review/upload package:
 
-```sh
+```powershell
 npm ci
+npm run clean:dist
 npm run lint
 npm run package:firefox
 ```
 
-Upload the generated zip from `dist/`.
+Upload `dist/coffer-<version>-firefox.zip` (for example,
+`dist/coffer-1.1.0-firefox.zip`).
 
 If AMO asks for a source archive, generate it from the exact release commit:
 
-```sh
-VERSION=$(node -p "require('./package.json').version")
-git archive --format=zip --output "dist/coffer-extension-${VERSION}-source.zip" HEAD
+```powershell
+$version = node -p "require('./package.json').version"
+git archive --format=zip --output "dist/coffer-extension-$version-source.zip" HEAD
 ```
 
 Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
 
 ## Permission Rationale
 
-- `storage`: stores only the configured Coffer URL.
+- `storage`: stores the configured Coffer URL and a boolean popup privacy preference.
 - `activeTab`: reads the active tab URL while the popup is open, so matching Coffer codes can be shown first.
 - `scripting`: injects a short one-time script only after the user clicks **Fill**.
 - `host_permissions` for `localhost` and `127.0.0.1`: supports local Coffer development.
@@ -40,13 +42,17 @@ Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
 
 After creating AMO API credentials, run:
 
-```sh
-export AMO_JWT_ISSUER=<issuer>
-export AMO_JWT_SECRET=<secret>
+```powershell
+$env:AMO_JWT_ISSUER = "<issuer>"
+$env:AMO_JWT_SECRET = "<secret>"
+$version = node -p "require('./package.json').version"
 
-npx web-ext sign --channel=listed \
-  --amo-metadata=docs/amo-metadata.json \
-  --upload-source-code="dist/coffer-extension-${VERSION}-source.zip" \
-  --api-key="$AMO_JWT_ISSUER" \
-  --api-secret="$AMO_JWT_SECRET"
+npx web-ext sign `
+  --source-dir=firefox `
+  --artifacts-dir=dist `
+  --channel=listed `
+  --amo-metadata=docs/amo-metadata.json `
+  --upload-source-code="dist/coffer-extension-$version-source.zip" `
+  --api-key="$env:AMO_JWT_ISSUER" `
+  --api-secret="$env:AMO_JWT_SECRET"
 ```

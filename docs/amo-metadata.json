@@ -16,6 +16,6 @@
   },
   "version": {
     "license": "GPL-3.0-only",
-    "approval_notes": "This extension is a companion client for a user-configured self-hosted Coffer server. It stores only the configured Coffer URL. The Coffer password is not stored. Decrypted vault data, TOTP secrets, and WebCrypto key handles stay in extension background memory only. Generated TOTP codes are not written to storage or the clipboard. The active tab URL is read only while the popup is open to prioritize matching codes. A page script is injected only after the user clicks Fill. Third-party library: vendor/argon2.umd.min.js is hash-wasm 4.12.0, MIT licensed. npm package: https://www.npmjs.com/package/hash-wasm/v/4.12.0. Source repository: https://github.com/Daninet/hash-wasm."
+    "approval_notes": "This extension is a companion client for a user-configured self-hosted Coffer server. It stores only the configured Coffer URL and a boolean popup privacy preference. The Coffer password is not stored. Decrypted vault data, TOTP secrets, and WebCrypto key handles stay in extension background memory only. Generated TOTP codes are not written to storage or the clipboard. The active tab URL is read only while the popup is open to prioritize matching codes. A page script is injected only after the user clicks Fill. Third-party library: vendor/argon2.umd.min.js is hash-wasm 4.12.0, MIT licensed. npm package: https://www.npmjs.com/package/hash-wasm/v/4.12.0. Source repository: https://github.com/Daninet/hash-wasm."
   }
 }
