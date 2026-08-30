@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Coffer",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Secure TOTP codes for a self-hosted Coffer vault.",
   "icons": {
     "16": "icons/coffer-favicon-16.png",
@@ -23,7 +23,7 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "alarms", "activeTab", "scripting"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "content_security_policy": {

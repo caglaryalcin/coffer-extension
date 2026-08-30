@@ -14,7 +14,8 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - The active page is filled only when the user clicks a code's **Fill** button.
 - After sign-in, the popup shows every active TOTP code in the encrypted vault.
 - Public service icon metadata is loaded from `/api/service-brands`; custom account icons come from the decrypted vault payload.
-- Codes can be filled from the popup without writing them to the clipboard.
+- Codes can be copied by clicking the displayed code itself or filled directly into the active page with **Fill**.
+- **Keep unlocked** can retain an unlocked session for up to 12 hours, including across Manifest V3 background-worker restarts.
 - The popup starts with usernames masked and can reveal or mask them with its eye button; TOTP codes remain visible.
 
 ## Security model
@@ -23,9 +24,10 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - TOTP secrets are decrypted inside the extension with the Coffer password.
 - The password is used for one unlock attempt and is not stored.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
-- Chrome may unload the Manifest V3 service worker and clear the in-memory unlock state sooner than Firefox.
-- Extension storage keeps only the configured Coffer URL and the popup privacy preference.
-- OTP codes are generated locally and are not written to extension storage.
+- When **Keep unlocked** is selected, only the minimum resume key material and session metadata are kept in extension-only, in-memory `storage.session`; the decrypted vault is fetched and decrypted again after a background restart.
+- The remembered session is capped at 12 hours and is cleared by **Lock**, expiry, a Coffer URL change, or the end of the browser session.
+- Persistent `storage.local` contains the configured Coffer URL, the popup privacy preference, and cached public service-icon metadata.
+- OTP codes are generated locally, are never written to extension storage, and reach the clipboard only after the displayed code is explicitly clicked.
 - The extension reads only the active tab URL while the popup is open, so page-specific codes can be shown first.
 - A short page script is injected only after **Fill** is clicked; it receives the current TOTP code and writes it to a likely one-time-code field.
 - Coffer accepts browser-extension origins for the unlock/read API flow, while vault mutations stay restricted to the same-origin Coffer web app.
@@ -40,7 +42,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 2. Click **Load Temporary Add-on**.
 3. Select `firefox/manifest.json`.
 4. Open the extension popup and enter the Coffer URL.
-5. Click **Unlock** to save the URL, grant access if needed, and view/fill codes.
+5. Click **Unlock** to save the URL, grant access if needed, and view, copy, or fill codes.
 
 ### Chrome
 
@@ -49,7 +51,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 3. Click **Load unpacked**.
 4. Select `chrome/`.
 5. Open the extension popup and enter the Coffer URL.
-6. Click **Unlock** to save the URL, grant access if needed, and view/fill codes.
+6. Click **Unlock** to save the URL, grant access if needed, and view, copy, or fill codes.
 
 ## Source Layout
 

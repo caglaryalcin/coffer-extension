@@ -6,7 +6,7 @@ Fill Coffer TOTP codes from Firefox using your self-hosted encrypted vault.
 
 ## Description
 
-Coffer for Firefox is a small companion extension for Coffer, a self-hosted authenticator vault. Sign in to your Coffer server from the extension popup, view your active TOTP codes, and fill one-time-code fields on the active page with one click.
+Coffer for Firefox is a small companion extension for Coffer, a self-hosted authenticator vault. Sign in to your Coffer server from the extension popup, click a displayed TOTP code to copy it, and fill one-time-code fields on the active page with one click.
 
 The Coffer tab does not need to be open. Your vault remains encrypted on the server and is decrypted locally in the extension after you enter your Coffer password.
 
@@ -33,10 +33,11 @@ This extension is a companion client for a user-configured self-hosted Coffer se
 
 Data handling:
 - No telemetry, analytics, advertising, or third-party tracking.
-- Firefox extension storage contains only the configured Coffer URL and a boolean popup privacy preference.
+- Persistent extension storage contains the configured Coffer URL, popup privacy preference, and cached public service-icon metadata.
 - The Coffer password is used for one unlock attempt and is not stored.
 - Decrypted vault data, TOTP secrets, and WebCrypto key handles stay in extension background memory only.
-- Generated TOTP codes are not written to extension storage or the clipboard.
+- If the user selects Keep unlocked, extension-only in-memory session storage holds only the minimum resume key material and bounded metadata for up to 12 hours. It is cleared on Lock, expiry, Coffer URL change, or browser-session end and is not persisted to disk.
+- Generated TOTP codes are never written to extension storage and reach the system clipboard only after the user explicitly clicks the displayed code.
 - Active tab URL is read only while the popup is open to prioritize matching codes.
 - A page script is injected only after the user clicks Fill; it receives the selected TOTP code and writes it to a likely one-time-code field.
 - Coffer allows browser-extension origins only for `identify` and `login`; vault mutations remain same-origin on the Coffer web app.

@@ -24,6 +24,23 @@
     });
   }
 
+  function wrapStorageArea(area) {
+    return {
+      clear: promisify(area, area.clear),
+      get: promisify(area, area.get),
+      remove: promisify(area, area.remove),
+      set: promisify(area, area.set),
+    };
+  }
+
+  function createAlarm(name, alarmInfo) {
+    try {
+      return Promise.resolve(chromeApi.alarms.create(name, alarmInfo));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
   function serializeError(error) {
     return {
       ok: false,
@@ -37,6 +54,15 @@
   }
 
   globalThis.browser = {
+    ...(chromeApi.alarms ? {
+      alarms: {
+        clear: promisify(chromeApi.alarms, chromeApi.alarms.clear),
+        create: createAlarm,
+        get: promisify(chromeApi.alarms, chromeApi.alarms.get),
+        getAll: promisify(chromeApi.alarms, chromeApi.alarms.getAll),
+        onAlarm: chromeApi.alarms.onAlarm,
+      },
+    } : {}),
     permissions: {
       contains: promisify(chromeApi.permissions, chromeApi.permissions.contains),
       remove: promisify(chromeApi.permissions, chromeApi.permissions.remove),
@@ -70,12 +96,8 @@
       executeScript: promisify(chromeApi.scripting, chromeApi.scripting.executeScript),
     },
     storage: {
-      local: {
-        clear: promisify(chromeApi.storage.local, chromeApi.storage.local.clear),
-        get: promisify(chromeApi.storage.local, chromeApi.storage.local.get),
-        remove: promisify(chromeApi.storage.local, chromeApi.storage.local.remove),
-        set: promisify(chromeApi.storage.local, chromeApi.storage.local.set),
-      },
+      local: wrapStorageArea(chromeApi.storage.local),
+      ...(chromeApi.storage.session ? { session: wrapStorageArea(chromeApi.storage.session) } : {}),
     },
     tabs: {
       create: promisify(chromeApi.tabs, chromeApi.tabs.create),

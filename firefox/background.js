@@ -5,6 +5,10 @@ import "./vendor/argon2.umd.min.js";
 
 const STORAGE_KEY = "cofferAutofillSettings";
 const BRAND_CATALOG_STORAGE_KEY = "cofferServiceBrandCatalogV1";
+const SESSION_STORAGE_KEY = "cofferUnlockedSessionV1";
+const SESSION_STORAGE_FORMAT = "coffer-extension-unlocked-session";
+const SESSION_STORAGE_VERSION = 1;
+const SESSION_ALARM_PREFIX = "coffer-session-expiry:";
 const BRAND_CATALOG_CACHE_VERSION = 2;
 const DEFAULT_SETTINGS = {
   cofferOrigin: "http://localhost:3000",
@@ -21,6 +25,7 @@ const MAX_PASSWORD_BYTES = 1_024;
 const MIN_PASSWORD_CHARACTERS = 12;
 const MAX_VAULT_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const VAULT_ID_BYTES = 16;
+const SESSION_ID_BYTES = 16;
 const SALT_BYTES = 16;
 const AES_KEY_BYTES = 32;
 const AUTH_KEY_BYTES = 32;
@@ -76,6 +81,11 @@ const SERVICE_URL_PATTERN = /[a-z][a-z\d+.-]*:\/\/[^\s<>"'()[\]{}]+/giu;
 const SERVICE_DOMAIN_PATTERN = /(?:[a-z\d-]+\.)+[a-z]{2,}/giu;
 
 let activeSession = null;
+let sessionEpoch = 0;
+let sessionRestorePromise = null;
+let sessionRestoreWarning = "";
+let sessionRestoreBlocked = false;
+let sessionStorageTask = Promise.resolve();
 let brandCatalogCache = null;
 let brandCatalogOrigin = "";
 let brandCatalogPromise = null;
@@ -301,7 +311,7 @@ async function saveSettings(input) {
   const settings = { cofferOrigin };
   await browser.storage.local.set({ [STORAGE_KEY]: settings });
   if (previous.cofferOrigin !== cofferOrigin) {
-    clearSession();
+    await clearSession();
     brandCatalogCache = null;
     brandCatalogOrigin = "";
     brandCatalogPromise = null;
@@ -531,7 +541,7 @@ async function createAuthProof(authKey) {
   }
 }
 
-async function unlockVaultHeader(password, header) {
+async function unlockVaultHeader(password, header, retainSessionKeys = false) {
   validateHeader(header);
   const salt = decodeExactBase64(header.kdf.salt, "header.kdf.salt", SALT_BYTES);
   let derived;
@@ -590,7 +600,10 @@ async function unlockVaultHeader(password, header) {
       throw new Error("Wrapped vault key has an invalid length.");
     }
     const vaultKey = await importAesKey(rawVaultKey, ["encrypt", "decrypt"]);
-    return { vaultKey, authKey };
+    const sessionKeyBytes = retainSessionKeys
+      ? { authKey: rawAuthKey.slice(), vaultKey: rawVaultKey.slice() }
+      : null;
+    return { vaultKey, authKey, sessionKeyBytes };
   } finally {
     salt.fill(0);
     derived?.fill(0);
@@ -1248,18 +1261,338 @@ async function loginVault(cofferOrigin, identifier, authProof) {
   };
 }
 
-function clearSession() {
-  activeSession = null;
+function sessionStorageArea() {
+  const area = browser.storage?.session;
+  return area &&
+    typeof area.get === "function" &&
+    typeof area.remove === "function" &&
+    typeof area.set === "function"
+    ? area
+    : null;
 }
 
-function sessionIsAvailable(settings) {
-  if (!activeSession) return false;
-  if (activeSession.cofferOrigin !== settings.cofferOrigin) {
-    clearSession();
-    return false;
+function clearSessionKeyBytes(keys) {
+  keys?.authKey?.fill(0);
+  keys?.vaultKey?.fill(0);
+}
+
+function createSessionId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(SESSION_ID_BYTES));
+  try {
+    return bytesToBase64(bytes);
+  } finally {
+    bytes.fill(0);
   }
-  if (activeSession.expiresAt <= Date.now()) {
-    clearSession();
+}
+
+function sessionAlarmName(sessionId) {
+  return `${SESSION_ALARM_PREFIX}${sessionId}`;
+}
+
+async function scheduleSessionExpiry(sessionId, expiresAt) {
+  if (!browser.alarms?.create) throw new Error("Session expiry alarms are unavailable.");
+  await browser.alarms.create(sessionAlarmName(sessionId), { when: expiresAt });
+}
+
+async function hasSessionExpiryAlarm(record) {
+  if (!browser.alarms?.get) return false;
+  const alarm = await browser.alarms.get(sessionAlarmName(record.sessionId));
+  return Number.isFinite(alarm?.scheduledTime) && Math.abs(alarm.scheduledTime - record.expiresAt) <= 1_000;
+}
+
+async function clearSessionExpiryAlarm(sessionId) {
+  if (typeof sessionId !== "string" || !browser.alarms?.clear) return;
+  await browser.alarms.clear(sessionAlarmName(sessionId)).catch(() => false);
+}
+
+async function clearSessionExpiryAlarms(knownSessionId = null) {
+  if (!browser.alarms?.clear) return;
+  const alarmNames = new Set();
+  if (typeof knownSessionId === "string") alarmNames.add(sessionAlarmName(knownSessionId));
+  if (browser.alarms.getAll) {
+    try {
+      const alarms = await browser.alarms.getAll();
+      for (const alarm of alarms ?? []) {
+        if (typeof alarm?.name === "string" && alarm.name.startsWith(SESSION_ALARM_PREFIX)) {
+          alarmNames.add(alarm.name);
+        }
+      }
+    } catch {
+      // The known alarm can still be revoked below, and storage invalidation remains authoritative.
+    }
+  }
+  await Promise.all([...alarmNames].map((name) => browser.alarms.clear(name).catch(() => false)));
+}
+
+function runSessionStorageTask(operation) {
+  const task = sessionStorageTask.catch(() => {}).then(operation);
+  sessionStorageTask = task.then(() => undefined, () => undefined);
+  return task;
+}
+
+function readRememberedSession() {
+  return runSessionStorageTask(async () => {
+    const area = sessionStorageArea();
+    if (!area) return null;
+    const stored = await area.get(SESSION_STORAGE_KEY);
+    return stored?.[SESSION_STORAGE_KEY] ?? null;
+  });
+}
+
+async function removeRememberedSession(expectedSessionId = undefined, knownSessionId = null) {
+  let result;
+  try {
+    result = await runSessionStorageTask(async () => {
+      if (expectedSessionId === undefined) {
+        await clearSessionExpiryAlarms(knownSessionId);
+      }
+      const area = sessionStorageArea();
+      if (!area) return { alarmId: expectedSessionId ?? null, invalidated: false };
+      let candidateId = null;
+      if (expectedSessionId !== undefined) {
+        const stored = await area.get(SESSION_STORAGE_KEY);
+        const candidate = stored?.[SESSION_STORAGE_KEY];
+        candidateId = isRecord(candidate) && typeof candidate.sessionId === "string"
+          ? candidate.sessionId
+          : null;
+        if (candidateId !== expectedSessionId) {
+          return { alarmId: expectedSessionId, invalidated: false };
+        }
+      }
+
+      // Replacing the record with null is the fail-closed step. Direct removal is the fallback.
+      try {
+        try {
+          await area.set({ [SESSION_STORAGE_KEY]: null });
+        } catch {
+          await area.set({ [SESSION_STORAGE_KEY]: null });
+        }
+        await area.remove(SESSION_STORAGE_KEY).catch(() => {});
+      } catch {
+        try {
+          await area.remove(SESSION_STORAGE_KEY);
+        } catch (error) {
+          await clearSessionExpiryAlarm(candidateId ?? knownSessionId);
+          throw error;
+        }
+      }
+      return { alarmId: candidateId ?? expectedSessionId ?? null, invalidated: true };
+    });
+  } catch (error) {
+    await clearSessionExpiryAlarm(expectedSessionId ?? knownSessionId);
+    throw error;
+  }
+  await clearSessionExpiryAlarm(result.alarmId);
+  return result.invalidated;
+}
+
+async function clearSession() {
+  const knownSessionId = activeSession?.sessionId ?? null;
+  sessionRestoreBlocked = true;
+  const clearedEpoch = ++sessionEpoch;
+  activeSession = null;
+  sessionRestoreWarning = "";
+  await removeRememberedSession(undefined, knownSessionId);
+  return clearedEpoch;
+}
+
+async function clearSessionIfCurrent(session) {
+  if (!session || activeSession !== session) return false;
+  sessionRestoreBlocked = true;
+  sessionEpoch += 1;
+  activeSession = null;
+  sessionRestoreWarning = "";
+  if (session.sessionId) await removeRememberedSession(session.sessionId);
+  return true;
+}
+
+function decodeRememberedSession(record, settings) {
+  const now = Date.now();
+  if (
+    !isRecord(record) ||
+    record.format !== SESSION_STORAGE_FORMAT ||
+    record.version !== SESSION_STORAGE_VERSION ||
+    typeof record.sessionId !== "string" ||
+    typeof record.cofferOrigin !== "string" ||
+    normalizeCofferOrigin(record.cofferOrigin) !== record.cofferOrigin ||
+    record.cofferOrigin !== settings.cofferOrigin ||
+    typeof record.identifier !== "string" ||
+    !record.identifier.trim() ||
+    record.identifier.length > 254 ||
+    record.identifier.trim() !== record.identifier ||
+    !Number.isSafeInteger(record.unlockedAt) ||
+    !Number.isSafeInteger(record.expiresAt) ||
+    record.unlockedAt > now ||
+    record.expiresAt <= record.unlockedAt ||
+    record.expiresAt - record.unlockedAt > EXTENDED_UNLOCK_MS ||
+    typeof record.vaultId !== "string" ||
+    !isRecord(record.keys)
+  ) {
+    throw new Error("The remembered session is invalid.");
+  }
+  decodeExactBase64(record.sessionId, "rememberedSession.sessionId", SESSION_ID_BYTES).fill(0);
+  decodeExactBase64(record.vaultId, "rememberedSession.vaultId", VAULT_ID_BYTES).fill(0);
+  if (record.expiresAt <= now) {
+    throw new Error("The remembered session has expired.");
+  }
+  let authKey = null;
+  let vaultKey = null;
+  try {
+    authKey = decodeExactBase64(record.keys.auth, "rememberedSession.keys.auth", AUTH_KEY_BYTES);
+    vaultKey = decodeExactBase64(record.keys.vault, "rememberedSession.keys.vault", AES_KEY_BYTES);
+    return { authKey, vaultKey };
+  } catch (error) {
+    authKey?.fill(0);
+    vaultKey?.fill(0);
+    throw error;
+  }
+}
+
+function isTransientSessionRestoreFailure(response) {
+  return new Set([
+    "corrupt_store",
+    "invalid_response",
+    "network_error",
+    "rate_limited",
+    "request_failed",
+    "request_timeout",
+    "storage_error",
+  ]).has(response?.error?.code);
+}
+
+async function persistRememberedSession(session, sessionKeyBytes) {
+  const area = sessionStorageArea();
+  if (!area) throw new Error("Session storage is unavailable.");
+  const record = {
+    format: SESSION_STORAGE_FORMAT,
+    version: SESSION_STORAGE_VERSION,
+    sessionId: session.sessionId,
+    cofferOrigin: session.cofferOrigin,
+    identifier: session.identifier,
+    vaultId: session.vaultId,
+    unlockedAt: session.unlockedAt,
+    expiresAt: session.expiresAt,
+    keys: {
+      auth: bytesToBase64(sessionKeyBytes.authKey),
+      vault: bytesToBase64(sessionKeyBytes.vaultKey),
+    },
+  };
+  await runSessionStorageTask(() => area.set({ [SESSION_STORAGE_KEY]: record }));
+  if (activeSession !== session) {
+    await removeRememberedSession(record.sessionId).catch(() => {});
+    throw new Error("The session changed while it was being remembered.");
+  }
+  await scheduleSessionExpiry(record.sessionId, record.expiresAt);
+  if (activeSession !== session) {
+    await clearSessionExpiryAlarm(record.sessionId);
+    await removeRememberedSession(record.sessionId).catch(() => {});
+    throw new Error("The session changed while it was being remembered.");
+  }
+}
+
+async function restoreRememberedSession(settings) {
+  if (sessionRestoreBlocked) return false;
+  if (sessionRestorePromise) return sessionRestorePromise;
+  const expectedEpoch = sessionEpoch;
+  const promise = (async () => {
+    let record = null;
+    let sessionKeyBytes = null;
+    try {
+      record = await readRememberedSession();
+      if (!record) {
+        if (sessionEpoch === expectedEpoch) sessionRestoreWarning = "";
+        return false;
+      }
+      if (Number.isSafeInteger(record.expiresAt) && record.expiresAt <= Date.now()) {
+        sessionRestoreWarning = "";
+        const expiredRecordId = typeof record.sessionId === "string" ? record.sessionId : undefined;
+        await removeRememberedSession(expiredRecordId).catch(() => {});
+        return false;
+      }
+      sessionKeyBytes = decodeRememberedSession(record, settings);
+      if (!(await hasSessionExpiryAlarm(record))) {
+        throw new Error("The remembered session expiry marker is missing.");
+      }
+      if (sessionEpoch !== expectedEpoch) return false;
+
+      const identified = await identifyVault(record.cofferOrigin, record.identifier);
+      if (!identified.ok) {
+        if (isTransientSessionRestoreFailure(identified)) {
+          sessionRestoreWarning = "Coffer could not restore the unlocked session while the server is unavailable.";
+          return false;
+        }
+        throw new Error("The remembered vault is no longer available.");
+      }
+      if (identified.header.vaultId !== record.vaultId) {
+        throw new Error("The remembered vault has changed.");
+      }
+
+      const runtime = {
+        authKey: await importAuthKey(sessionKeyBytes.authKey),
+        vaultKey: await importAesKey(sessionKeyBytes.vaultKey, ["encrypt", "decrypt"]),
+      };
+      const authProof = await createAuthProof(runtime.authKey);
+      const login = await loginVault(record.cofferOrigin, record.identifier, authProof);
+      if (!login.ok) {
+        if (isTransientSessionRestoreFailure(login)) {
+          sessionRestoreWarning = "Coffer could not restore the unlocked session while the server is unavailable.";
+          return false;
+        }
+        throw new Error("The remembered session is no longer accepted.");
+      }
+      const decrypted = await decryptVaultPayload(login.payload, runtime.vaultKey);
+      const vault = parseVaultPayload(decrypted);
+      if (sessionEpoch !== expectedEpoch || record.expiresAt <= Date.now()) return false;
+      await scheduleSessionExpiry(record.sessionId, record.expiresAt);
+      if (sessionEpoch !== expectedEpoch || record.expiresAt <= Date.now()) {
+        await clearSessionExpiryAlarm(record.sessionId);
+        await removeRememberedSession(record.sessionId).catch(() => {});
+        return false;
+      }
+
+      const restoredSession = {
+        cofferOrigin: record.cofferOrigin,
+        expiresAt: record.expiresAt,
+        identifier: record.identifier,
+        remembered: true,
+        revision: login.revision,
+        runtime,
+        sessionId: record.sessionId,
+        unlockedAt: record.unlockedAt,
+        vault,
+        vaultId: record.vaultId,
+      };
+      activeSession = restoredSession;
+      sessionRestoreBlocked = false;
+      sessionRestoreWarning = "";
+      return true;
+    } catch {
+      if (sessionEpoch === expectedEpoch) {
+        sessionRestoreBlocked = true;
+        sessionRestoreWarning = "The saved Coffer session is no longer valid. Unlock Coffer again.";
+        const recordId = isRecord(record) && typeof record.sessionId === "string"
+          ? record.sessionId
+          : undefined;
+        await removeRememberedSession(recordId).catch(() => {});
+      }
+      return false;
+    } finally {
+      clearSessionKeyBytes(sessionKeyBytes);
+    }
+  })();
+  sessionRestorePromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (sessionRestorePromise === promise) sessionRestorePromise = null;
+  }
+}
+
+async function sessionIsAvailable(settings) {
+  if (!activeSession) return restoreRememberedSession(settings);
+  const session = activeSession;
+  if (session.cofferOrigin !== settings.cofferOrigin || session.expiresAt <= Date.now()) {
+    await clearSessionIfCurrent(session);
     return false;
   }
   return true;
@@ -1281,7 +1614,7 @@ async function publicVaultState(settings = null) {
   void serviceBrandCatalog(catalogOrigin);
   const page = await currentPageContext(settings ?? { cofferOrigin: catalogOrigin });
   if (activeSession !== session || session.expiresAt <= Date.now()) {
-    if (activeSession === session) clearSession();
+    if (activeSession === session) await clearSessionIfCurrent(session);
     return {
       ok: false,
       error: {
@@ -1339,6 +1672,8 @@ async function publicVaultState(settings = null) {
 async function popupState() {
   const settings = await readSettings();
   const hasPermission = await hasCofferPermission(settings.cofferOrigin);
+  const unlocked = hasPermission ? await sessionIsAvailable(settings) : false;
+  if (!hasPermission) await clearSession();
   const cofferUrl = new URL(settings.cofferOrigin);
   const insecureOrigin = cofferUrl.protocol === "http:" && !isLocalHost(cofferUrl.hostname);
   return {
@@ -1346,9 +1681,8 @@ async function popupState() {
     settings,
     hasPermission,
     insecureOrigin,
-    coffer: hasPermission && sessionIsAvailable(settings)
-      ? await publicVaultState(settings)
-      : null,
+    sessionWarning: unlocked ? "" : sessionRestoreWarning,
+    coffer: unlocked ? await publicVaultState(settings) : null,
   };
 }
 
@@ -1386,14 +1720,44 @@ async function unlockCoffer(credentials) {
   // Start the public icon catalog in parallel with the authenticated unlock.
   // Vault rendering never waits for this optional request.
   void serviceBrandCatalog(settings.cofferOrigin);
-  clearSession();
+  const unlockEpoch = await clearSession();
+  if (sessionEpoch !== unlockEpoch) {
+    return {
+      ok: false,
+      error: { code: "unlock_cancelled", message: "The Coffer unlock was cancelled." },
+    };
+  }
   const identifier = credentials.identifier.trim();
   const identified = await identifyVault(settings.cofferOrigin, identifier);
   if (!identified.ok) return identified;
+  if (sessionEpoch !== unlockEpoch) {
+    return {
+      ok: false,
+      error: { code: "unlock_cancelled", message: "The Coffer unlock was cancelled." },
+    };
+  }
 
   let runtime;
+  let session = null;
+  let sessionKeyBytes = null;
   try {
-    runtime = await unlockVaultHeader(credentials.password, identified.header);
+    const unlockedRuntime = await unlockVaultHeader(
+      credentials.password,
+      identified.header,
+      credentials.rememberLogin,
+    );
+    runtime = {
+      authKey: unlockedRuntime.authKey,
+      vaultKey: unlockedRuntime.vaultKey,
+    };
+    sessionKeyBytes = unlockedRuntime.sessionKeyBytes;
+    if (sessionEpoch !== unlockEpoch) {
+      clearSessionKeyBytes(sessionKeyBytes);
+      return {
+        ok: false,
+        error: { code: "unlock_cancelled", message: "The Coffer unlock was cancelled." },
+      };
+    }
   } catch {
     return {
       ok: false,
@@ -1404,30 +1768,51 @@ async function unlockCoffer(credentials) {
     };
   }
 
-  const authProof = await createAuthProof(runtime.authKey);
-  const login = await loginVault(settings.cofferOrigin, identifier, authProof);
-  if (!login.ok) return login;
-
   try {
+    const authProof = await createAuthProof(runtime.authKey);
+    const login = await loginVault(settings.cofferOrigin, identifier, authProof);
+    if (!login.ok) return login;
     const decrypted = await decryptVaultPayload(login.payload, runtime.vaultKey);
     const vault = parseVaultPayload(decrypted);
+    if (sessionEpoch !== unlockEpoch) {
+      return {
+        ok: false,
+        error: { code: "unlock_cancelled", message: "The Coffer unlock was cancelled." },
+      };
+    }
     const now = Date.now();
-    activeSession = {
+    session = {
       cofferOrigin: settings.cofferOrigin,
       expiresAt: now + (credentials.rememberLogin ? EXTENDED_UNLOCK_MS : DEFAULT_UNLOCK_MS),
       identifier,
+      remembered: credentials.rememberLogin,
       revision: login.revision,
       runtime,
+      sessionId: credentials.rememberLogin ? createSessionId() : null,
       unlockedAt: now,
       vault,
       vaultId: identified.header.vaultId,
     };
+    activeSession = session;
+    sessionRestoreBlocked = false;
+    let warning = "";
+    if (credentials.rememberLogin) {
+      try {
+        await persistRememberedSession(session, sessionKeyBytes);
+      } catch {
+        await removeRememberedSession(session.sessionId).catch(() => {});
+        session.remembered = false;
+        session.sessionId = null;
+        warning = "Coffer is unlocked, but this browser could not keep the session after the extension goes idle.";
+      }
+    }
     return {
       ok: true,
       vault: await publicVaultState(settings),
+      warning,
     };
   } catch {
-    clearSession();
+    if (session) await clearSessionIfCurrent(session);
     return {
       ok: false,
       error: {
@@ -1435,27 +1820,39 @@ async function unlockCoffer(credentials) {
         message: "Coffer could not decrypt the vault payload.",
       },
     };
+  } finally {
+    clearSessionKeyBytes(sessionKeyBytes);
   }
 }
 
 async function refreshVault() {
   const settings = await readSettings();
-  if (!sessionIsAvailable(settings)) {
+  if (!(await sessionIsAvailable(settings))) {
     return await publicVaultState(settings);
   }
-  const authProof = await createAuthProof(activeSession.runtime.authKey);
-  const login = await loginVault(settings.cofferOrigin, activeSession.identifier, authProof);
-  if (!login.ok) return login;
+  const session = activeSession;
+  if (!session) return await publicVaultState(settings);
+  const authProof = await createAuthProof(session.runtime.authKey);
+  if (activeSession !== session) return await publicVaultState(settings);
+  const login = await loginVault(settings.cofferOrigin, session.identifier, authProof);
+  if (activeSession !== session) return await publicVaultState(settings);
+  if (!login.ok) {
+    if (session.remembered && !isTransientSessionRestoreFailure(login)) {
+      await clearSessionIfCurrent(session);
+    }
+    return login;
+  }
   try {
-    const decrypted = await decryptVaultPayload(login.payload, activeSession.runtime.vaultKey);
-    activeSession.vault = parseVaultPayload(decrypted);
-    activeSession.revision = login.revision;
+    const decrypted = await decryptVaultPayload(login.payload, session.runtime.vaultKey);
+    if (activeSession !== session) return await publicVaultState(settings);
+    session.vault = parseVaultPayload(decrypted);
+    session.revision = login.revision;
     return {
       ok: true,
       vault: await publicVaultState(settings),
     };
   } catch {
-    clearSession();
+    await clearSessionIfCurrent(session);
     return {
       ok: false,
       error: {
@@ -1561,7 +1958,7 @@ async function fillCode(accountId) {
   }
 
   const settings = await readSettings();
-  if (!sessionIsAvailable(settings)) {
+  if (!(await sessionIsAvailable(settings))) {
     return {
       ok: false,
       error: {
@@ -1571,7 +1968,14 @@ async function fillCode(accountId) {
     };
   }
 
-  const account = activeSession.vault.accounts.find((candidate) => (
+  const session = activeSession;
+  if (!session) {
+    return {
+      ok: false,
+      error: { code: "vault_locked", message: "Sign in before filling a code." },
+    };
+  }
+  const account = session.vault.accounts.find((candidate) => (
     candidate.id === accountId && !candidate.archived
   ));
   if (!account) {
@@ -1589,6 +1993,13 @@ async function fillCode(accountId) {
     [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   } catch {
     tab = null;
+  }
+  if (activeSession !== session || session.expiresAt <= Date.now()) {
+    if (activeSession === session) await clearSessionIfCurrent(session);
+    return {
+      ok: false,
+      error: { code: "vault_locked", message: "Sign in before filling a code." },
+    };
   }
   if (!tab?.id || !tab.url) {
     return {
@@ -1632,6 +2043,13 @@ async function fillCode(accountId) {
     account.period,
     account.algorithm,
   );
+  if (activeSession !== session || session.expiresAt <= Date.now()) {
+    if (activeSession === session) await clearSessionIfCurrent(session);
+    return {
+      ok: false,
+      error: { code: "vault_locked", message: "Sign in before filling a code." },
+    };
+  }
   try {
     const results = await browser.scripting.executeScript({
       target: { tabId: tab.id },
@@ -1668,12 +2086,33 @@ async function openCoffer() {
 
 async function sessionKeepalive() {
   const settings = await readSettings();
-  const unlocked = sessionIsAvailable(settings);
+  const unlocked = await sessionIsAvailable(settings);
+  const session = unlocked ? activeSession : null;
   return {
     ok: true,
-    unlocked,
-    expiresAt: unlocked ? activeSession.expiresAt : null,
+    unlocked: session !== null,
+    expiresAt: session?.expiresAt ?? null,
   };
+}
+
+async function expireRememberedSession(sessionId) {
+  try {
+    const record = await readRememberedSession();
+    if (!isRecord(record) || record.sessionId !== sessionId) return;
+    if (Number.isSafeInteger(record.expiresAt) && record.expiresAt > Date.now()) {
+      await scheduleSessionExpiry(record.sessionId, record.expiresAt);
+      return;
+    }
+    if (activeSession?.sessionId === sessionId) {
+      sessionRestoreBlocked = true;
+      sessionEpoch += 1;
+      activeSession = null;
+    }
+    sessionRestoreWarning = "";
+    await removeRememberedSession(record.sessionId).catch(() => {});
+  } catch {
+    // The lazy expiry check still rejects stale sessions on the next extension request.
+  }
 }
 
 function handleMessage(message) {
@@ -1698,12 +2137,16 @@ function handleMessage(message) {
   if (message.type === "fill-code") return fillCode(message.accountId);
   if (message.type === "session-keepalive") return sessionKeepalive();
   if (message.type === "lock-coffer") {
-    clearSession();
-    return Promise.resolve({ ok: true });
+    return clearSession().then(() => ({ ok: true }));
   }
   if (message.type === "open-coffer") return openCoffer();
   return false;
 }
+
+browser.alarms?.onAlarm?.addListener((alarm) => {
+  if (typeof alarm?.name !== "string" || !alarm.name.startsWith(SESSION_ALARM_PREFIX)) return;
+  void expireRememberedSession(alarm.name.slice(SESSION_ALARM_PREFIX.length));
+});
 
 browser.runtime.onMessage.addListener((message) => {
   try {

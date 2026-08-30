@@ -8,6 +8,7 @@ const openCofferButton = document.querySelector("#open-coffer");
 const lockButton = document.querySelector("#lock-coffer");
 const privacyButton = document.querySelector("#toggle-privacy");
 const statusBox = document.querySelector("#status");
+const copyStatus = document.querySelector("#copy-status");
 const authCard = document.querySelector("#auth-card");
 const emailInput = document.querySelector("#coffer-email");
 const passwordInput = document.querySelector("#coffer-password");
@@ -36,6 +37,12 @@ let unlockPending = false;
 let totpRefreshPending = false;
 const iconRetryCounts = new Map();
 const rowAccountIds = new WeakMap();
+const copyFeedbackTimers = new WeakMap();
+let copyWritePending = false;
+let copyWriteEpoch = 0;
+let activeCopyButton = null;
+let activeCopyEpoch = 0;
+let invalidatedCopyEpoch = 0;
 
 function setStatus(message, tone = "") {
   statusBox.hidden = false;
@@ -197,6 +204,125 @@ function categoryLabel(account) {
   return String(account.group || "").trim() || "Uncategorized";
 }
 
+async function writeClipboardText(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall back to the legacy click-activated copy path below.
+    }
+  }
+
+  if (typeof document.execCommand !== "function") {
+    throw new Error("Clipboard access is unavailable.");
+  }
+  const previousFocus = document.activeElement;
+  const buffer = document.createElement("textarea");
+  buffer.value = value;
+  buffer.setAttribute("readonly", "");
+  buffer.setAttribute("aria-hidden", "true");
+  buffer.tabIndex = -1;
+  buffer.style.position = "fixed";
+  buffer.style.left = "-1000px";
+  buffer.style.opacity = "0";
+  buffer.style.pointerEvents = "none";
+  document.body.append(buffer);
+  let copied = false;
+  try {
+    buffer.select();
+    buffer.setSelectionRange(0, buffer.value.length);
+    copied = document.execCommand("copy");
+  } finally {
+    buffer.remove();
+    try {
+      previousFocus?.focus?.({ preventScroll: true });
+    } catch {
+      // Focus restoration is best-effort if the triggering control was removed.
+    }
+  }
+  if (!copied) throw new Error("Clipboard access was denied.");
+}
+
+function invalidateCopyOperations() {
+  if (activeCopyEpoch) {
+    invalidatedCopyEpoch = activeCopyEpoch;
+    copyWritePending = true;
+  } else if (!invalidatedCopyEpoch) {
+    copyWritePending = false;
+  }
+  copyWriteEpoch += 1;
+  if (activeCopyButton) delete activeCopyButton.dataset.copyState;
+  activeCopyButton = null;
+  activeCopyEpoch = 0;
+  copyStatus.textContent = "";
+}
+
+function finishInvalidatedCopy(operationEpoch) {
+  if (invalidatedCopyEpoch !== operationEpoch) return;
+  invalidatedCopyEpoch = 0;
+  copyWritePending = false;
+  renderCodes();
+}
+
+function announceCopiedCode(message, operationEpoch) {
+  copyStatus.textContent = "";
+  window.setTimeout(() => {
+    if (copyWriteEpoch === operationEpoch) copyStatus.textContent = message;
+  }, 0);
+}
+
+async function copyCode(account, codeButton) {
+  if (copyWritePending || codeButton.dataset.copyState) return;
+  const value = String(account.rawCode || "");
+  if (!/^\d{6}(?:\d{2})?$/u.test(value)) {
+    setStatus("This code is no longer available to copy.", "warning");
+    return;
+  }
+  const operationEpoch = ++copyWriteEpoch;
+  invalidatedCopyEpoch = 0;
+  copyWritePending = true;
+  activeCopyButton = codeButton;
+  activeCopyEpoch = operationEpoch;
+  codeButton.dataset.copyState = "pending";
+  copyStatus.textContent = "";
+  renderCodes();
+  try {
+    await writeClipboardText(value);
+    if (copyWriteEpoch !== operationEpoch) {
+      finishInvalidatedCopy(operationEpoch);
+      return;
+    }
+    copyWritePending = false;
+    activeCopyButton = null;
+    activeCopyEpoch = 0;
+    renderCodes();
+    codeButton.dataset.copyState = "copied";
+    codeButton.textContent = "Copied";
+    codeButton.setAttribute("aria-label", `${account.service} code copied`);
+    announceCopiedCode(`${account.service} code copied.`, operationEpoch);
+    const previousTimer = copyFeedbackTimers.get(codeButton);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+    const timer = window.setTimeout(() => {
+      copyFeedbackTimers.delete(codeButton);
+      delete codeButton.dataset.copyState;
+      renderCodes();
+    }, 900);
+    copyFeedbackTimers.set(codeButton, timer);
+  } catch {
+    if (copyWriteEpoch !== operationEpoch) {
+      finishInvalidatedCopy(operationEpoch);
+      return;
+    }
+    copyWritePending = false;
+    activeCopyButton = null;
+    activeCopyEpoch = 0;
+    delete codeButton.dataset.copyState;
+    renderCodes();
+    setStatus("The browser did not allow copying this code.", "warning");
+  }
+}
+
 async function fillCode(account, button) {
   button.disabled = true;
   try {
@@ -237,8 +363,22 @@ function createCodeRow() {
 
   const meta = document.createElement("div");
   meta.className = "code-meta";
-  const code = document.createElement("span");
+  const code = document.createElement("button");
+  code.type = "button";
   code.className = "code-value";
+  let pointerLeaveTimer = null;
+  code.addEventListener("pointerenter", () => {
+    if (pointerLeaveTimer !== null) window.clearTimeout(pointerLeaveTimer);
+    pointerLeaveTimer = null;
+    code.classList.add("pointer-hover");
+  });
+  code.addEventListener("pointerleave", () => {
+    if (pointerLeaveTimer !== null) window.clearTimeout(pointerLeaveTimer);
+    pointerLeaveTimer = window.setTimeout(() => {
+      pointerLeaveTimer = null;
+      if (!code.matches(":hover")) code.classList.remove("pointer-hover");
+    }, 80);
+  });
   const remaining = document.createElement("span");
   remaining.className = "code-remaining";
   const fillButton = document.createElement("button");
@@ -262,7 +402,12 @@ function createCategoryHeader() {
 
 function setText(element, value) {
   const text = String(value);
-  if (element.textContent !== text) element.textContent = text;
+  if (element.textContent === text) return;
+  if (element.childNodes.length === 1 && element.firstChild?.nodeType === Node.TEXT_NODE) {
+    element.firstChild.data = text;
+    return;
+  }
+  element.replaceChildren(document.createTextNode(text));
 }
 
 function setUsernameText(element, value) {
@@ -308,12 +453,19 @@ function updateCategoryHeader(header, label, count) {
   if (counter) setText(counter, `${count}`);
 }
 
+function updateRemaining(row, seconds) {
+  const remaining = row.querySelector(".code-remaining");
+  if (!remaining) return;
+  const className = seconds <= 5 ? "code-remaining expiring" : "code-remaining";
+  if (remaining.className !== className) remaining.className = className;
+  setText(remaining, `${seconds}s`);
+}
+
 function updateCodeRow(row, account) {
   const logo = row.querySelector(".code-logo");
   const service = row.querySelector(".code-copy strong");
   const identity = row.querySelector(".code-identity");
   const code = row.querySelector(".code-value");
-  const remaining = row.querySelector(".code-remaining");
   const fillButton = row.querySelector(".fill-button");
 
   const iconKey = accountIconKey(account);
@@ -323,11 +475,22 @@ function updateCodeRow(row, account) {
   }
   if (service) setText(service, account.service);
   setUsernameText(identity, account.identity || account.group || "Coffer account");
-  if (code) setText(code, account.code);
-  if (remaining) {
-    remaining.className = account.remaining <= 5 ? "code-remaining expiring" : "code-remaining";
-    setText(remaining, `${account.remaining}s`);
+  if (code && !code.dataset.copyState) {
+    const rawCode = String(account.rawCode || "");
+    const canCopy = /^\d{6}(?:\d{2})?$/u.test(rawCode);
+    const accessibleCode = rawCode.split("").join(" ");
+    setText(code, account.code);
+    code.disabled = !canCopy || copyWritePending;
+    code.title = canCopy && !copyWritePending ? "Copy code" : "";
+    code.setAttribute(
+      "aria-label",
+      canCopy
+        ? `Copy ${account.service} code ${accessibleCode}`
+        : `${account.service} code temporarily unavailable`,
+    );
+    code.onclick = () => void copyCode(account, code);
   }
+  updateRemaining(row, account.remaining);
   if (fillButton) {
     fillButton.onclick = () => fillCode(account, fillButton);
     if (!fillButton.disabled && fillButton.textContent !== "Fill") fillButton.textContent = "Fill";
@@ -379,22 +542,30 @@ function renderCodeRows(container, accounts, emptyMessage, { grouped = false } =
   }
 
   const activeElements = new Set();
+  let nextElement = container.firstElementChild;
+  const placeElement = (element) => {
+    activeElements.add(element);
+    if (element === nextElement) {
+      nextElement = nextElement.nextElementSibling;
+    } else {
+      container.insertBefore(element, nextElement);
+    }
+  };
+
   const renderAccount = (account) => {
     const accountId = String(account.id);
     const row = existingRows.get(accountId) ?? createCodeRow();
     rowAccountIds.set(row, accountId);
-    activeElements.add(row);
     updateCodeRow(row, account);
-    container.append(row);
+    placeElement(row);
   };
 
   if (grouped) {
     for (const group of groupedAccounts(accounts)) {
       const header = existingHeaders.get(group.label) ?? createCategoryHeader();
       header.dataset.category = group.label;
-      activeElements.add(header);
       updateCategoryHeader(header, group.label, group.accounts.length);
-      container.append(header);
+      placeElement(header);
       for (const account of group.accounts) renderAccount(account);
     }
   } else {
@@ -403,6 +574,16 @@ function renderCodeRows(container, accounts, emptyMessage, { grouped = false } =
 
   for (const child of [...container.children]) {
     if (!activeElements.has(child)) child.remove();
+  }
+}
+
+function updateRenderedCountdowns(accounts) {
+  const remainingById = new Map(accounts.map((account) => [String(account.id), account.remaining]));
+  for (const container of [pageCodesList, codesList]) {
+    for (const row of container.querySelectorAll(".code-row")) {
+      const accountId = rowAccountIds.get(row);
+      if (remainingById.has(accountId)) updateRemaining(row, remainingById.get(accountId));
+    }
   }
 }
 
@@ -447,6 +628,7 @@ function setVaultVisible(visible) {
   vaultTools.hidden = !visible;
   allCodesSection.hidden = !visible;
   if (!visible) {
+    invalidateCopyOperations();
     if (iconRefreshTimer !== null) window.clearTimeout(iconRefreshTimer);
     iconRefreshTimer = null;
     iconRefreshDelay = 350;
@@ -516,7 +698,11 @@ async function performRefresh(epoch) {
       setVaultVisible(false);
       latestCodes = [];
       latestPageCodes = [];
-      clearStatus();
+      if (state.sessionWarning) {
+        setStatus(state.sessionWarning, "warning");
+      } else {
+        clearStatus();
+      }
       renderCodes([]);
       return;
     }
@@ -595,7 +781,7 @@ connectionForm.addEventListener("submit", async (event) => {
       setAuthVisible(true);
       return;
     }
-    applyVaultState(response.vault);
+    applyVaultState(response.vault, response.warning ?? "");
   } catch (error) {
     passwordInput.value = "";
     setStatus(caughtErrorMessage(error, "Coffer could not be unlocked."), "warning");
@@ -613,14 +799,18 @@ async function lockCoffer() {
   latestPageCodes = [];
   searchInput.value = "";
   passwordInput.value = "";
+  rememberInput.checked = false;
   clearStatus();
   setVaultVisible(false);
   setAuthVisible(true);
   renderCodes([]);
   try {
-    await browser.runtime.sendMessage({ type: "lock-coffer" });
+    const response = await browser.runtime.sendMessage({ type: "lock-coffer" });
+    if (!response?.ok) {
+      setStatus("Coffer locked this popup, but the browser could not clear the remembered session.", "warning");
+    }
   } catch {
-    // The UI should still return to the locked state if the background wakes slowly.
+    setStatus("Coffer locked this popup, but the browser could not clear the remembered session.", "warning");
   }
 }
 
@@ -687,7 +877,7 @@ function tickCodes() {
     return updated;
   });
   latestPageCodes = latestPageCodes.map((account) => updatedById.get(account.id) ?? account);
-  renderCodes(latestCodes, latestPageCodes);
+  updateRenderedCountdowns(latestCodes);
 }
 
 async function keepSessionAlive() {

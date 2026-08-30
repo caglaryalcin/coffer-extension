@@ -54,7 +54,7 @@
             </label>
             <label class="remember-row">
               <input id="coffer-remember" name="rememberLogin" type="checkbox">
-              <span>Keep unlocked while the extension stays awake</span>
+              <span>Keep unlocked for up to 12 hours</span>
             </label>
             <button type="submit" class="unlock-button">Unlock</button>
           </div>
@@ -63,6 +63,7 @@
 
       <section class="status-card" id="status" role="status" aria-live="polite" hidden>
       </section>
+      <p class="visually-hidden" id="copy-status" role="status" aria-live="polite"></p>
 
       <section class="vault-tools" id="vault-tools" hidden>
         <input id="code-search" type="search" placeholder="Search codes" autocomplete="off">
@@ -73,8 +74,7 @@
         <div id="page-codes-list" class="codes-list"></div>
       </section>
 
-      <section class="codes" id="all-codes" aria-labelledby="codes-title" hidden>
-        <h2 id="codes-title">All Codes</h2>
+      <section class="codes" id="all-codes" aria-label="All codes" hidden>
         <div id="codes-list" class="codes-list"></div>
       </section>
     </main>
