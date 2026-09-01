@@ -24,7 +24,8 @@ assert.match(popupSource, /pointerLeaveTimer = window\.setTimeout\(/u);
 assert.match(popupSource, /if \(!code\.matches\(":hover"\)\) code\.classList\.remove\("pointer-hover"\);/u);
 assert.match(popupSource, /\}, 80\);/u);
 assert.match(popupSource, /code\.onclick = \(\) => void copyCode\(account, code\);/u);
-assert.match(popupSource, /if \(code && !code\.dataset\.copyState\)/u);
+assert.match(popupSource, /function updateCodeButton\(code, account\) \{\s*if \(!code \|\| code\.dataset\.copyState\) return;/u);
+assert.match(popupSource, /code\.disabled = !canCopy;/u);
 assert.match(popupSource, /if \(copyWritePending \|\| codeButton\.dataset\.copyState\) return;/u);
 assert.match(popupSource, /meta\.append\(code, remaining, fillButton\);/u);
 assert.doesNotMatch(popupSource, /copyButton/u);
@@ -61,6 +62,11 @@ assert.notEqual(copyStart, -1, "Could not find the popup copy handler.");
 assert.notEqual(copyEnd, -1, "Could not find the end of the popup copy handler.");
 const copySource = popupSource.slice(copyStart, copyEnd);
 assert.doesNotMatch(copySource, /browser\.runtime\.sendMessage/u);
+assert.doesNotMatch(
+  copySource,
+  /\brenderCodes\s*\(/u,
+  "Copy feedback must not re-render every code row.",
+);
 const clipboardCall = copySource.indexOf("await writeClipboardText(value)");
 assert.notEqual(clipboardCall, -1, "Copy must write the current raw TOTP value.");
 assert.doesNotMatch(
@@ -170,11 +176,19 @@ function codeButton(text = "123 456") {
   return {
     attributes: {},
     dataset: {},
+    disabled: false,
     textContent: text,
     setAttribute(name, value) {
       this.attributes[name] = value;
     },
   };
+}
+
+function restoreTestCodeButton(button, account) {
+  delete button.dataset.copyState;
+  const rawCode = String(account.rawCode || "");
+  button.textContent = account.code ?? rawCode.replace(/(\d{3})(?=\d)/u, "$1 ");
+  button.disabled = !/^\d{6}(?:\d{2})?$/u.test(rawCode);
 }
 
 function timerWindow() {
@@ -213,6 +227,7 @@ const loadCopyCoordinator = new Function(
   "copyFeedbackTimers",
   "window",
   "renderCodes",
+  "restoreCodeButton",
   "setStatus",
   `
     let copyWritePending = false;
@@ -244,6 +259,7 @@ const pendingCoordinator = loadCopyCoordinator(
   new WeakMap(),
   pendingTimers.window,
   () => {},
+  restoreTestCodeButton,
   (message) => pendingWarnings.push(message),
 );
 const firstButton = codeButton();
@@ -267,6 +283,64 @@ assert.deepEqual(pendingWarnings, []);
 assert.equal(pendingStatus.textContent, "", "The live region must be cleared before announcing again.");
 pendingTimers.run(0);
 assert.equal(pendingStatus.textContent, "First code copied.");
+
+const stableWriteGate = deferred();
+const stableStatus = { textContent: "" };
+const stableTimers = timerWindow();
+const copiedButton = codeButton();
+const untouchedButton = codeButton("654 321");
+const copiedRow = { codeButton: copiedButton };
+const untouchedRow = { codeButton: untouchedButton };
+const visibleRows = { children: [copiedRow, untouchedRow] };
+let copyRenderCount = 0;
+const stableCoordinator = loadCopyCoordinator(
+  { clipboard: {} },
+  async () => stableWriteGate.promise,
+  stableStatus,
+  new WeakMap(),
+  stableTimers.window,
+  () => { copyRenderCount += 1; },
+  restoreTestCodeButton,
+  () => {},
+);
+const originalUntouchedRow = visibleRows.children[1];
+const originalUntouchedButton = originalUntouchedRow.codeButton;
+const assertUntouchedRow = (phase) => {
+  assert.strictEqual(
+    visibleRows.children[1],
+    originalUntouchedRow,
+    `Copy ${phase} must preserve the other code row DOM node.`,
+  );
+  assert.strictEqual(
+    visibleRows.children[1].codeButton,
+    originalUntouchedButton,
+    `Copy ${phase} must preserve the other code button DOM node.`,
+  );
+  assert.equal(
+    originalUntouchedButton.textContent,
+    "654 321",
+    `Copy ${phase} must keep the other code visible.`,
+  );
+  assert.equal(
+    originalUntouchedButton.disabled,
+    false,
+    `Copy ${phase} must not dim the other code by disabling it.`,
+  );
+};
+
+const stableCopy = stableCoordinator.copyCode(
+  { rawCode: "123456", service: "Copied row" },
+  copiedButton,
+);
+assert.equal(copyRenderCount, 0, "Starting a copy must not redraw the code list.");
+assertUntouchedRow("while the clipboard write is pending");
+stableWriteGate.resolve();
+await stableCopy;
+assert.equal(copyRenderCount, 0, "Finishing a copy must not redraw the code list.");
+assertUntouchedRow("after the clipboard write succeeds");
+stableTimers.run(900);
+assert.equal(copyRenderCount, 0, "Clearing copy feedback must not redraw the code list.");
+assertUntouchedRow("when the copied feedback clears");
 
 const invalidatedWriteGate = deferred();
 let clipboardValue = "";
@@ -294,6 +368,7 @@ const invalidatedCoordinator = loadCopyCoordinator(
   new WeakMap(),
   invalidatedTimers.window,
   () => {},
+  restoreTestCodeButton,
   (message) => invalidatedWarnings.push(message),
 );
 const invalidatedButton = codeButton();
@@ -336,4 +411,4 @@ for (const browser of ["chrome", "firefox"]) {
   assert.equal(manifest.permissions.includes("clipboardWrite"), false);
 }
 
-console.log("Verified popup copy behavior, accessibility hooks, and heading removal.");
+console.log("Verified stable popup copy behavior, accessibility hooks, and heading removal.");

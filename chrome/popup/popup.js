@@ -262,7 +262,6 @@ function finishInvalidatedCopy(operationEpoch) {
   if (invalidatedCopyEpoch !== operationEpoch) return;
   invalidatedCopyEpoch = 0;
   copyWritePending = false;
-  renderCodes();
 }
 
 function announceCopiedCode(message, operationEpoch) {
@@ -286,7 +285,6 @@ async function copyCode(account, codeButton) {
   activeCopyEpoch = operationEpoch;
   codeButton.dataset.copyState = "pending";
   copyStatus.textContent = "";
-  renderCodes();
   try {
     await writeClipboardText(value);
     if (copyWriteEpoch !== operationEpoch) {
@@ -296,7 +294,6 @@ async function copyCode(account, codeButton) {
     copyWritePending = false;
     activeCopyButton = null;
     activeCopyEpoch = 0;
-    renderCodes();
     codeButton.dataset.copyState = "copied";
     codeButton.textContent = "Copied";
     codeButton.setAttribute("aria-label", `${account.service} code copied`);
@@ -305,8 +302,7 @@ async function copyCode(account, codeButton) {
     if (previousTimer !== undefined) window.clearTimeout(previousTimer);
     const timer = window.setTimeout(() => {
       copyFeedbackTimers.delete(codeButton);
-      delete codeButton.dataset.copyState;
-      renderCodes();
+      restoreCodeButton(codeButton, account);
     }, 900);
     copyFeedbackTimers.set(codeButton, timer);
   } catch {
@@ -317,8 +313,7 @@ async function copyCode(account, codeButton) {
     copyWritePending = false;
     activeCopyButton = null;
     activeCopyEpoch = 0;
-    delete codeButton.dataset.copyState;
-    renderCodes();
+    restoreCodeButton(codeButton, account);
     setStatus("The browser did not allow copying this code.", "warning");
   }
 }
@@ -461,6 +456,34 @@ function updateRemaining(row, seconds) {
   setText(remaining, `${seconds}s`);
 }
 
+function updateCodeButton(code, account) {
+  if (!code || code.dataset.copyState) return;
+  const rawCode = String(account.rawCode || "");
+  const canCopy = /^\d{6}(?:\d{2})?$/u.test(rawCode);
+  const accessibleCode = rawCode.split("").join(" ");
+  setText(code, account.code);
+  code.disabled = !canCopy;
+  code.title = canCopy ? "Copy code" : "";
+  code.setAttribute(
+    "aria-label",
+    canCopy
+      ? `Copy ${account.service} code ${accessibleCode}`
+      : `${account.service} code temporarily unavailable`,
+  );
+  code.onclick = () => void copyCode(account, code);
+}
+
+function restoreCodeButton(codeButton, fallbackAccount) {
+  delete codeButton.dataset.copyState;
+  if (codeButton.isConnected === false) return;
+  const row = typeof codeButton.closest === "function" ? codeButton.closest(".code-row") : null;
+  const accountId = row ? rowAccountIds.get(row) : null;
+  const currentAccount = accountId === null || accountId === undefined
+    ? fallbackAccount
+    : latestCodes.find((account) => String(account.id) === String(accountId)) ?? fallbackAccount;
+  updateCodeButton(codeButton, currentAccount);
+}
+
 function updateCodeRow(row, account) {
   const logo = row.querySelector(".code-logo");
   const service = row.querySelector(".code-copy strong");
@@ -475,21 +498,7 @@ function updateCodeRow(row, account) {
   }
   if (service) setText(service, account.service);
   setUsernameText(identity, account.identity || account.group || "Coffer account");
-  if (code && !code.dataset.copyState) {
-    const rawCode = String(account.rawCode || "");
-    const canCopy = /^\d{6}(?:\d{2})?$/u.test(rawCode);
-    const accessibleCode = rawCode.split("").join(" ");
-    setText(code, account.code);
-    code.disabled = !canCopy || copyWritePending;
-    code.title = canCopy && !copyWritePending ? "Copy code" : "";
-    code.setAttribute(
-      "aria-label",
-      canCopy
-        ? `Copy ${account.service} code ${accessibleCode}`
-        : `${account.service} code temporarily unavailable`,
-    );
-    code.onclick = () => void copyCode(account, code);
-  }
+  updateCodeButton(code, account);
   updateRemaining(row, account.remaining);
   if (fillButton) {
     fillButton.onclick = () => fillCode(account, fillButton);
