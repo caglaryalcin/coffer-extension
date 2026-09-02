@@ -826,7 +826,14 @@ async function lockCoffer() {
 searchInput.addEventListener("input", () => renderCodes());
 
 openCofferButton.addEventListener("click", async () => {
-  await browser.runtime.sendMessage({ type: "open-coffer" });
+  try {
+    const response = await browser.runtime.sendMessage({ type: "open-coffer" });
+    if (!response?.ok) {
+      setStatus(errorMessage(response, "Coffer could not be opened."), "warning");
+    }
+  } catch (error) {
+    setStatus(caughtErrorMessage(error, "Coffer could not be opened."), "warning");
+  }
 });
 
 lockButton.addEventListener("click", () => {

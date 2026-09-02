@@ -9,6 +9,11 @@ const popupSource = await readFile(resolve(rootDir, "chrome", "popup", "popup.js
 const popupHtml = await readFile(resolve(rootDir, "chrome", "popup", "popup.html"), "utf8");
 const popupCss = await readFile(resolve(rootDir, "chrome", "popup", "popup.css"), "utf8");
 
+const originInputTag = popupHtml.match(/<input\b(?=[^>]*\bid="coffer-origin")[^>]*>/u)?.[0];
+assert.ok(originInputTag, "Could not find the Coffer URL input.");
+assert.match(originInputTag, /\bplaceholder="https:\/\/coffer\.yourhost\.com"/u);
+assert.doesNotMatch(originInputTag, /\bvalue\s*=/u, "The Coffer URL input must start empty.");
+
 assert.doesNotMatch(popupHtml, />\s*All Codes\s*</u);
 assert.doesNotMatch(popupHtml, /id="codes-title"/u);
 assert.match(popupHtml, /id="all-codes" aria-label="All codes"/u);

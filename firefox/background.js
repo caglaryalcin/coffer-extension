@@ -11,7 +11,7 @@ const SESSION_STORAGE_VERSION = 1;
 const SESSION_ALARM_PREFIX = "coffer-session-expiry:";
 const BRAND_CATALOG_CACHE_VERSION = 2;
 const DEFAULT_SETTINGS = {
-  cofferOrigin: "http://localhost:3000",
+  cofferOrigin: "",
 };
 
 const VAULT_API_TIMEOUT_MS = 10_000;
@@ -318,15 +318,19 @@ async function saveSettings(input) {
     brandCatalogRetryAt = 0;
     brandCatalogFailureCount = 0;
     await browser.storage.local.remove(BRAND_CATALOG_STORAGE_KEY).catch(() => {});
-    await browser.permissions.remove({
-      origins: [originPermissionPattern(previous.cofferOrigin)],
-    }).catch(() => false);
+    if (previous.cofferOrigin) {
+      await browser.permissions.remove({
+        origins: [originPermissionPattern(previous.cofferOrigin)],
+      }).catch(() => false);
+    }
   }
   return { ok: true, settings };
 }
 
 async function hasCofferPermission(origin) {
-  return browser.permissions.contains({ origins: [originPermissionPattern(origin)] });
+  const normalizedOrigin = normalizeCofferOrigin(origin);
+  if (!normalizedOrigin) return false;
+  return browser.permissions.contains({ origins: [originPermissionPattern(normalizedOrigin)] });
 }
 
 async function requestCofferPermission(origin) {
@@ -1674,8 +1678,8 @@ async function popupState() {
   const hasPermission = await hasCofferPermission(settings.cofferOrigin);
   const unlocked = hasPermission ? await sessionIsAvailable(settings) : false;
   if (!hasPermission) await clearSession();
-  const cofferUrl = new URL(settings.cofferOrigin);
-  const insecureOrigin = cofferUrl.protocol === "http:" && !isLocalHost(cofferUrl.hostname);
+  const cofferUrl = settings.cofferOrigin ? new URL(settings.cofferOrigin) : null;
+  const insecureOrigin = cofferUrl !== null && cofferUrl.protocol === "http:" && !isLocalHost(cofferUrl.hostname);
   return {
     ok: true,
     settings,
@@ -2080,6 +2084,15 @@ async function fillCode(accountId) {
 
 async function openCoffer() {
   const settings = await readSettings();
+  if (!settings.cofferOrigin) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_origin",
+        message: "Enter a valid Coffer URL.",
+      },
+    };
+  }
   await browser.tabs.create({ url: settings.cofferOrigin });
   return { ok: true };
 }

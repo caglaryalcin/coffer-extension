@@ -1,6 +1,6 @@
 {
   "name": "coffer-extension",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Browser extension for securely filling Coffer TOTP codes.",
   "license": "GPL-3.0-only",
   "type": "module",
@@ -17,7 +17,7 @@
   },
   "scripts": {
     "verify:sources": "node scripts/verify-sources.mjs",
-    "test": "node scripts/test-brand-catalog.mjs && node scripts/test-popup.mjs && node scripts/test-session-resume.mjs",
+    "test": "node scripts/test-brand-catalog.mjs && node scripts/test-settings.mjs && node scripts/test-popup.mjs && node scripts/test-session-resume.mjs",
     "lint:firefox": "web-ext lint --source-dir firefox --self-hosted --warnings-as-errors",
     "lint:chrome": "node --check chrome/background.js && node --check chrome/browser-compat.js && node --check chrome/popup/popup.js",
     "lint": "npm run verify:sources && npm test && npm run lint:firefox && npm run lint:chrome",
