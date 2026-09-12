@@ -8,6 +8,8 @@ const rootDir = resolve(scriptDir, "..");
 const popupSource = await readFile(resolve(rootDir, "chrome", "popup", "popup.js"), "utf8");
 const popupHtml = await readFile(resolve(rootDir, "chrome", "popup", "popup.html"), "utf8");
 const popupCss = await readFile(resolve(rootDir, "chrome", "popup", "popup.css"), "utf8");
+const inlineSource = await readFile(resolve(rootDir, "chrome", "inline-autofill.js"), "utf8");
+const backgroundSource = await readFile(resolve(rootDir, "chrome", "background.js"), "utf8");
 
 const originInputTag = popupHtml.match(/<input\b(?=[^>]*\bid="coffer-origin")[^>]*>/u)?.[0];
 assert.ok(originInputTag, "Could not find the Coffer URL input.");
@@ -19,6 +21,11 @@ assert.doesNotMatch(popupHtml, /id="codes-title"/u);
 assert.match(popupHtml, /id="all-codes" aria-label="All codes"/u);
 assert.match(popupHtml, /id="copy-status" role="status" aria-live="polite"/u);
 assert.match(popupHtml, />Keep unlocked for up to 12 hours</u);
+assert.match(popupHtml, /id="connection-form" class="connection-form" autocomplete="on"/u);
+assert.match(popupHtml, /id="coffer-email"[^>]*autocomplete="username"/u);
+assert.match(popupHtml, /id="coffer-password"[^>]*autocomplete="current-password"/u);
+assert.match(popupHtml, /id="coffer-remember-email"[^>]*type="checkbox"/u);
+assert.match(popupHtml, /id="coffer-remember-password"[^>]*type="checkbox"/u);
 
 assert.match(popupSource, /const value = String\(account\.rawCode \|\| ""\);/u);
 assert.match(popupSource, /const code = document\.createElement\("button"\);/u);
@@ -52,7 +59,8 @@ assert.match(popupCss, /\.page-codes \.fill-button \{[\s\S]*?font-size: 15px;/u)
 assert.match(popupSource, /previousFocus\?\.focus\?\.\(\{ preventScroll: true \}\);/u);
 assert.match(popupSource, /function invalidateCopyOperations\(\)/u);
 assert.match(popupSource, /if \(!visible\) \{\s*invalidateCopyOperations\(\);/u);
-assert.match(popupSource, /applyVaultState\(response\.vault, response\.warning \?\? ""\)/u);
+assert.match(popupSource, /await saveSelectedLogin\(emailInput\.value, password\);/u);
+assert.match(popupSource, /applyVaultState\(response\.vault, \[response\.warning, savedLoginWarning\]\.filter\(Boolean\)\.join\(" "\)\)/u);
 assert.match(popupSource, /if \(state\.sessionWarning\)/u);
 assert.match(popupSource, /const placeElement = \(element\) =>/u);
 assert.match(popupSource, /container\.insertBefore\(element, nextElement\);/u);
@@ -60,6 +68,106 @@ assert.doesNotMatch(popupSource, /container\.append\((?:row|header)\);/u);
 assert.match(popupSource, /element\.firstChild\.data = text;/u);
 assert.match(popupSource, /function updateRenderedCountdowns\(accounts\)/u);
 assert.match(popupSource, /updateRenderedCountdowns\(latestCodes\);/u);
+assert.match(popupCss, /@keyframes username-pan/u);
+assert.match(popupCss, /animation: username-pan var\(--username-overflow-duration\) ease-in-out infinite alternate;/u);
+assert.match(popupCss, /@media \(prefers-reduced-motion: reduce\)/u);
+
+const metricsStart = popupSource.indexOf("function usernameOverflowMetrics");
+const metricsEnd = popupSource.indexOf("function measureUsernameOverflow", metricsStart);
+assert.notEqual(metricsStart, -1, "Could not find username overflow metrics.");
+assert.notEqual(metricsEnd, -1, "Could not find the end of username overflow metrics.");
+const overflowMetrics = new Function(`
+  const USERNAME_OVERFLOW_TOLERANCE_PX = 1;
+  const USERNAME_SCROLL_SPEED_PX_PER_SECOND = 40;
+  const MIN_USERNAME_SCROLL_SECONDS = 2;
+  const MAX_USERNAME_SCROLL_SECONDS = 12;
+  ${popupSource.slice(metricsStart, metricsEnd)}
+  return usernameOverflowMetrics;
+`)();
+assert.deepEqual(overflowMetrics(120, 120.5), { overflowing: false, distance: 0, duration: 0 });
+assert.deepEqual(overflowMetrics(100, 128), { overflowing: true, distance: 28, duration: 2 });
+assert.deepEqual(overflowMetrics(100, 800), { overflowing: true, distance: 700, duration: 12 });
+
+const savedLoginStart = popupSource.indexOf("function validSavedLogin");
+const savedLoginEnd = popupSource.indexOf("function updatePrivacyButton", savedLoginStart);
+assert.notEqual(savedLoginStart, -1, "Could not find saved login helpers.");
+assert.notEqual(savedLoginEnd, -1, "Could not find the end of saved login helpers.");
+function savedLoginHarness(initialState, initialInputs = {}) {
+  const localState = structuredClone(initialState);
+  const emailInput = { value: initialInputs.email ?? "" };
+  const passwordInput = { value: initialInputs.password ?? "" };
+  const rememberEmailInput = { checked: false };
+  const rememberPasswordInput = { checked: false };
+  const browser = {
+    storage: {
+      local: {
+        async get(key) {
+          return Object.hasOwn(localState, key) ? { [key]: structuredClone(localState[key]) } : {};
+        },
+        async remove(key) {
+          delete localState[key];
+        },
+        async set(values) {
+          Object.assign(localState, structuredClone(values));
+        },
+      },
+    },
+  };
+  const helpers = new Function(
+    "browser",
+    "emailInput",
+    "passwordInput",
+    "rememberEmailInput",
+    "rememberPasswordInput",
+    `
+      const SAVED_LOGIN_STORAGE_KEY = "cofferSavedLoginV1";
+      let savedLogin = { email: "", password: "" };
+      let savedLoginStorageTask = Promise.resolve();
+      ${popupSource.slice(savedLoginStart, savedLoginEnd)}
+      return { forgetSavedLoginField, loadSavedLogin, saveSelectedLogin, validSavedLogin };
+    `,
+  )(browser, emailInput, passwordInput, rememberEmailInput, rememberPasswordInput);
+  return { helpers, localState, emailInput, passwordInput, rememberEmailInput, rememberPasswordInput };
+}
+
+const savedCredentials = savedLoginHarness({
+  cofferSavedLoginV1: { email: "saved@example.com", password: "saved password" },
+});
+await savedCredentials.helpers.loadSavedLogin();
+assert.equal(savedCredentials.emailInput.value, "saved@example.com");
+assert.equal(savedCredentials.passwordInput.value, "saved password");
+assert.equal(savedCredentials.rememberEmailInput.checked, true);
+assert.equal(savedCredentials.rememberPasswordInput.checked, true);
+savedCredentials.rememberEmailInput.checked = false;
+await savedCredentials.helpers.saveSelectedLogin("new@example.com", "new password");
+assert.deepEqual(savedCredentials.localState.cofferSavedLoginV1, { email: "", password: "new password" });
+await savedCredentials.helpers.forgetSavedLoginField("password");
+assert.equal(Object.hasOwn(savedCredentials.localState, "cofferSavedLoginV1"), false);
+
+const managerFilled = savedLoginHarness({}, {
+  email: "manager@example.com",
+  password: "manager password",
+});
+await managerFilled.helpers.loadSavedLogin();
+assert.equal(managerFilled.emailInput.value, "manager@example.com");
+assert.equal(managerFilled.passwordInput.value, "manager password");
+assert.equal(managerFilled.rememberEmailInput.checked, false);
+assert.equal(managerFilled.rememberPasswordInput.checked, false);
+
+assert.match(inlineSource, /type: "inline-suggestions"/u);
+assert.match(inlineSource, /attachShadow\(\{ mode: "closed" \}\)/u);
+assert.match(inlineSource, /one-time-code/u);
+assert.match(inlineSource, /function segmentedFields\(field, codeLength\)/u);
+assert.match(inlineSource, /function applyLogo\(logo, account\)/u);
+assert.match(inlineSource, /function createCountdown\(account\)/u);
+assert.match(inlineSource, /COUNTDOWN_CIRCUMFERENCE \* \(1 - Math\.min\(1, remaining \/ period\)\)/u);
+assert.match(inlineSource, /event\.key === "ArrowDown"/u);
+assert.match(inlineSource, /event\.key === "Enter"/u);
+assert.match(inlineSource, /setNativeValue\(field, code\);/u);
+assert.match(backgroundSource, /if \(message\.type === "inline-suggestions"\) return inlineSuggestions\(sender\);/u);
+assert.match(backgroundSource, /accounts: vault\.pageMatches\.map\(\(account\) => \(\{/u);
+assert.match(backgroundSource, /iconUrl: account\.iconUrl,/u);
+assert.match(backgroundSource, /period: account\.period,/u);
 
 const copyStart = popupSource.indexOf("async function copyCode");
 const copyEnd = popupSource.indexOf("async function fillCode", copyStart);
@@ -414,6 +522,13 @@ assert.equal(clipboardValue, "654321");
 for (const browser of ["chrome", "firefox"]) {
   const manifest = JSON.parse(await readFile(resolve(rootDir, browser, "manifest.json"), "utf8"));
   assert.equal(manifest.permissions.includes("clipboardWrite"), false);
+  assert.deepEqual(manifest.host_permissions, ["http://*/*", "https://*/*"]);
+  assert.deepEqual(manifest.content_scripts, [{
+    matches: ["http://*/*", "https://*/*"],
+    js: ["inline-autofill.js"],
+    run_at: "document_idle",
+    all_frames: true,
+  }]);
 }
 
-console.log("Verified stable popup copy behavior, accessibility hooks, and heading removal.");
+console.log("Verified popup copy behavior, saved sign-in fields, username animation, and inline autofill wiring.");

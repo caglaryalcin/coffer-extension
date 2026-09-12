@@ -12,6 +12,8 @@ const copyStatus = document.querySelector("#copy-status");
 const authCard = document.querySelector("#auth-card");
 const emailInput = document.querySelector("#coffer-email");
 const passwordInput = document.querySelector("#coffer-password");
+const rememberEmailInput = document.querySelector("#coffer-remember-email");
+const rememberPasswordInput = document.querySelector("#coffer-remember-password");
 const rememberInput = document.querySelector("#coffer-remember");
 const vaultTools = document.querySelector("#vault-tools");
 const searchInput = document.querySelector("#code-search");
@@ -21,7 +23,12 @@ const allCodesSection = document.querySelector("#all-codes");
 const codesList = document.querySelector("#codes-list");
 
 const PRIVACY_STORAGE_KEY = "cofferPopupPrivacyMasked";
+const SAVED_LOGIN_STORAGE_KEY = "cofferSavedLoginV1";
 const SESSION_KEEPALIVE_MS = 20_000;
+const USERNAME_OVERFLOW_TOLERANCE_PX = 1;
+const USERNAME_SCROLL_SPEED_PX_PER_SECOND = 40;
+const MIN_USERNAME_SCROLL_SECONDS = 2;
+const MAX_USERNAME_SCROLL_SECONDS = 12;
 
 let latestCodes = [];
 let latestPageCodes = [];
@@ -43,6 +50,9 @@ let copyWriteEpoch = 0;
 let activeCopyButton = null;
 let activeCopyEpoch = 0;
 let invalidatedCopyEpoch = 0;
+let savedLogin = { email: "", password: "" };
+let savedLoginStorageTask = Promise.resolve();
+const usernameMeasureFrames = new WeakMap();
 
 function setStatus(message, tone = "") {
   statusBox.hidden = false;
@@ -405,14 +415,81 @@ function setText(element, value) {
   element.replaceChildren(document.createTextNode(text));
 }
 
+function usernameOverflowMetrics(viewportWidth, contentWidth) {
+  const safeViewportWidth = Number.isFinite(viewportWidth) ? Math.max(0, viewportWidth) : 0;
+  const safeContentWidth = Number.isFinite(contentWidth) ? Math.max(0, contentWidth) : 0;
+  const distance = safeContentWidth - safeViewportWidth;
+  if (distance <= USERNAME_OVERFLOW_TOLERANCE_PX) {
+    return { overflowing: false, distance: 0, duration: 0 };
+  }
+  const roundedDistance = Math.ceil(distance);
+  return {
+    overflowing: true,
+    distance: roundedDistance,
+    duration: Math.min(
+      MAX_USERNAME_SCROLL_SECONDS,
+      Math.max(MIN_USERNAME_SCROLL_SECONDS, roundedDistance / USERNAME_SCROLL_SPEED_PX_PER_SECOND),
+    ),
+  };
+}
+
+function measureUsernameOverflow(element) {
+  const track = element?.querySelector(".code-identity-track");
+  if (!track || element.dataset.usernameMasked === "true") return;
+  const metrics = usernameOverflowMetrics(
+    element.clientWidth || element.getBoundingClientRect().width,
+    Math.max(track.scrollWidth, track.getBoundingClientRect().width),
+  );
+  element.classList.toggle("is-overflowing", metrics.overflowing);
+  if (metrics.overflowing) {
+    element.style.setProperty("--username-overflow-distance", `${metrics.distance}px`);
+    element.style.setProperty("--username-overflow-duration", `${metrics.duration}s`);
+    element.title = track.textContent ?? "";
+  } else {
+    element.style.removeProperty("--username-overflow-distance");
+    element.style.removeProperty("--username-overflow-duration");
+    element.removeAttribute("title");
+  }
+}
+
+function scheduleUsernameOverflowMeasure(element) {
+  const pendingFrame = usernameMeasureFrames.get(element);
+  if (pendingFrame !== undefined) window.cancelAnimationFrame(pendingFrame);
+  const frame = window.requestAnimationFrame(() => {
+    usernameMeasureFrames.delete(element);
+    measureUsernameOverflow(element);
+  });
+  usernameMeasureFrames.set(element, frame);
+}
+
+const usernameResizeObserver = typeof globalThis.ResizeObserver === "function"
+  ? new ResizeObserver((entries) => {
+      for (const entry of entries) scheduleUsernameOverflowMeasure(entry.target);
+    })
+  : null;
+
 function setUsernameText(element, value) {
   if (!element) return;
   if (!usernamesMasked) {
     delete element.dataset.usernameMasked;
-    setText(element, value);
+    let track = element.querySelector(".code-identity-track");
+    if (!track) {
+      track = document.createElement("span");
+      track.className = "code-identity-track";
+      element.replaceChildren(track);
+      usernameResizeObserver?.observe(element);
+    }
+    setText(track, value);
+    scheduleUsernameOverflowMeasure(element);
     return;
   }
   if (element.dataset.usernameMasked === "true") return;
+
+  usernameResizeObserver?.unobserve(element);
+  element.classList.remove("is-overflowing");
+  element.style.removeProperty("--username-overflow-distance");
+  element.style.removeProperty("--username-overflow-duration");
+  element.removeAttribute("title");
 
   const visualMask = document.createElement("span");
   visualMask.className = "privacy-mask";
@@ -423,6 +500,59 @@ function setUsernameText(element, value) {
   accessibleLabel.textContent = "Username hidden";
   element.replaceChildren(visualMask, accessibleLabel);
   element.dataset.usernameMasked = "true";
+}
+
+function validSavedLogin(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { email: "", password: "" };
+  }
+  return {
+    email: typeof value.email === "string" && value.email.length <= 254 ? value.email : "",
+    password: typeof value.password === "string" && value.password.length <= 1024 ? value.password : "",
+  };
+}
+
+function restoreSavedLoginFields({ clearMissing = false } = {}) {
+  rememberEmailInput.checked = Boolean(savedLogin.email);
+  rememberPasswordInput.checked = Boolean(savedLogin.password);
+  if (savedLogin.email || clearMissing) emailInput.value = savedLogin.email;
+  if (savedLogin.password || clearMissing) passwordInput.value = savedLogin.password;
+}
+
+function writeSavedLogin() {
+  const record = { ...savedLogin };
+  const operation = savedLoginStorageTask.catch(() => {}).then(async () => {
+    if (!record.email && !record.password) {
+      await browser.storage.local.remove(SAVED_LOGIN_STORAGE_KEY);
+      return;
+    }
+    await browser.storage.local.set({ [SAVED_LOGIN_STORAGE_KEY]: record });
+  });
+  savedLoginStorageTask = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+async function loadSavedLogin() {
+  try {
+    const stored = await browser.storage.local.get(SAVED_LOGIN_STORAGE_KEY);
+    savedLogin = validSavedLogin(stored?.[SAVED_LOGIN_STORAGE_KEY]);
+  } catch {
+    savedLogin = { email: "", password: "" };
+  }
+  restoreSavedLoginFields();
+}
+
+async function saveSelectedLogin(email, password) {
+  savedLogin = {
+    email: rememberEmailInput.checked ? String(email).trim() : "",
+    password: rememberPasswordInput.checked ? String(password) : "",
+  };
+  await writeSavedLogin();
+}
+
+async function forgetSavedLoginField(field) {
+  savedLogin = { ...savedLogin, [field]: "" };
+  await writeSavedLogin();
 }
 
 function updatePrivacyButton() {
@@ -784,13 +914,20 @@ connectionForm.addEventListener("submit", async (event) => {
         rememberLogin: rememberInput.checked,
       },
     });
-    passwordInput.value = "";
     if (!response?.ok) {
+      passwordInput.value = "";
       setStatus(errorMessage(response, "Coffer could not be unlocked."), "warning");
       setAuthVisible(true);
       return;
     }
-    applyVaultState(response.vault, response.warning ?? "");
+    let savedLoginWarning = "";
+    try {
+      await saveSelectedLogin(emailInput.value, password);
+    } catch {
+      savedLoginWarning = "The selected sign-in fields could not be saved on this device.";
+    }
+    passwordInput.value = "";
+    applyVaultState(response.vault, [response.warning, savedLoginWarning].filter(Boolean).join(" "));
   } catch (error) {
     passwordInput.value = "";
     setStatus(caughtErrorMessage(error, "Coffer could not be unlocked."), "warning");
@@ -809,6 +946,7 @@ async function lockCoffer() {
   searchInput.value = "";
   passwordInput.value = "";
   rememberInput.checked = false;
+  restoreSavedLoginFields({ clearMissing: true });
   clearStatus();
   setVaultVisible(false);
   setAuthVisible(true);
@@ -824,6 +962,22 @@ async function lockCoffer() {
 }
 
 searchInput.addEventListener("input", () => renderCodes());
+
+rememberEmailInput.addEventListener("change", () => {
+  if (!rememberEmailInput.checked) {
+    void forgetSavedLoginField("email").catch(() => {
+      setStatus("The saved email could not be removed from this device.", "warning");
+    });
+  }
+});
+
+rememberPasswordInput.addEventListener("change", () => {
+  if (!rememberPasswordInput.checked) {
+    void forgetSavedLoginField("password").catch(() => {
+      setStatus("The saved password could not be removed from this device.", "warning");
+    });
+  }
+});
 
 openCofferButton.addEventListener("click", async () => {
   try {
@@ -849,6 +1003,7 @@ privacyButton.addEventListener("click", () => {
 });
 
 async function initialize() {
+  await loadSavedLogin();
   await loadPrivacyPreference();
   await refresh();
 }

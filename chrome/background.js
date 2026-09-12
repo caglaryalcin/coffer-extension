@@ -58,6 +58,7 @@ const GENERIC_HOST_LABELS = new Set([
   "auth",
   "id",
   "login",
+  "live",
   "m",
   "mail",
   "secure",
@@ -79,6 +80,13 @@ const GENERIC_DOMAIN_LABELS = new Set([
 ]);
 const SERVICE_URL_PATTERN = /[a-z][a-z\d+.-]*:\/\/[^\s<>"'()[\]{}]+/giu;
 const SERVICE_DOMAIN_PATTERN = /(?:[a-z\d-]+\.)+[a-z]{2,}/giu;
+const PROVIDER_DOMAIN_FAMILIES = [
+  {
+    brandId: "microsoft",
+    serviceKeys: ["hotmail", "live", "microsoft", "microsoft365", "microsoftaccount", "msn", "office365", "outlook"],
+    domains: ["hotmail.com", "live.com", "microsoft.com", "microsoftonline.com", "msn.com", "office.com", "outlook.com"],
+  },
+];
 
 let activeSession = null;
 let sessionEpoch = 0;
@@ -262,11 +270,10 @@ function accountPageTokens(account) {
   ]);
 }
 
-async function currentPageContext(settings) {
+function pageContextFromUrl(value, settings) {
   try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.url) return null;
-    const url = new URL(tab.url);
+    if (!value) return null;
+    const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     if (settings?.cofferOrigin && url.origin === settings.cofferOrigin) return null;
     const tokens = hostTokens(url.hostname);
@@ -282,10 +289,31 @@ async function currentPageContext(settings) {
   }
 }
 
-function accountMatchesPage(account, page) {
+async function currentPageContext(settings) {
+  try {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    return pageContextFromUrl(tab?.url, settings);
+  } catch {
+    return null;
+  }
+}
+
+function accountMatchesPage(account, page, catalog = null, cofferOrigin = "") {
   if (!page) return false;
   const accountTokens = accountPageTokens(account);
-  return page.tokens.some((token) => accountTokens.has(token));
+  if (page.tokens.some((token) => accountTokens.has(token))) return true;
+
+  const brand = catalog && cofferOrigin
+    ? resolveServiceBrand(account.service, account.iconBrand, catalog, cofferOrigin)
+    : null;
+  const domains = new Set(brand?.domains ?? []);
+  const serviceKey = foldedMatchValue(account.service);
+  for (const family of PROVIDER_DOMAIN_FAMILIES) {
+    if (brand?.id === family.brandId || family.serviceKeys.includes(serviceKey)) {
+      for (const domain of family.domains) domains.add(domain);
+    }
+  }
+  return [...domains].some((domain) => isDomainOrSubdomain(page.hostname, domain));
 }
 
 async function readSettings() {
@@ -1602,7 +1630,7 @@ async function sessionIsAvailable(settings) {
   return true;
 }
 
-async function publicVaultState(settings = null) {
+async function publicVaultState(settings = null, pageOverride = undefined) {
   const session = activeSession;
   if (!session) {
     return {
@@ -1616,7 +1644,9 @@ async function publicVaultState(settings = null) {
   const now = Date.now();
   const catalogOrigin = session.cofferOrigin;
   void serviceBrandCatalog(catalogOrigin);
-  const page = await currentPageContext(settings ?? { cofferOrigin: catalogOrigin });
+  const page = pageOverride === undefined
+    ? await currentPageContext(settings ?? { cofferOrigin: catalogOrigin })
+    : pageOverride;
   if (activeSession !== session || session.expiresAt <= Date.now()) {
     if (activeSession === session) await clearSessionIfCurrent(session);
     return {
@@ -1633,7 +1663,7 @@ async function publicVaultState(settings = null) {
   const iconsPending = brandCatalogOrigin === catalogOrigin &&
     brandCatalogCache === null &&
     (brandCatalogPromise !== null || brandCatalogRetryAt > 0);
-  const accounts = await Promise.all(session.vault.accounts
+  const accountEntries = await Promise.all(session.vault.accounts
     .filter((account) => !account.archived)
     .map(async (account) => {
       const rawCode = await generateTotp(
@@ -1645,19 +1675,25 @@ async function publicVaultState(settings = null) {
       );
       const icon = accountIcon(account, catalog, catalogOrigin);
       return {
-        id: account.id,
-        code: formatCode(rawCode),
-        rawCode,
-        favorite: account.favorite,
-        group: account.group,
-        identity: account.identity,
-        period: account.period,
-        remaining: account.period - (Math.floor(now / 1000) % account.period),
-        service: account.service,
-        ...icon,
+        account: {
+          id: account.id,
+          code: formatCode(rawCode),
+          rawCode,
+          favorite: account.favorite,
+          group: account.group,
+          identity: account.identity,
+          period: account.period,
+          remaining: account.period - (Math.floor(now / 1000) % account.period),
+          service: account.service,
+          ...icon,
+        },
+        matchesPage: accountMatchesPage(account, page, catalog, catalogOrigin),
       };
     }));
-  const pageMatches = page ? accounts.filter((account) => accountMatchesPage(account, page)) : [];
+  const accounts = accountEntries.map((entry) => entry.account);
+  const pageMatches = page
+    ? accountEntries.filter((entry) => entry.matchesPage).map((entry) => entry.account)
+    : [];
   return {
     ok: true,
     accounts,
@@ -2097,6 +2133,35 @@ async function openCoffer() {
   return { ok: true };
 }
 
+async function inlineSuggestions(sender) {
+  const settings = await readSettings();
+  if (!Number.isInteger(sender?.tab?.id) || !(await sessionIsAvailable(settings))) {
+    return { ok: true, accounts: [], expiresAt: null };
+  }
+  const page = pageContextFromUrl(sender.tab.url ?? sender.url, settings);
+  if (!page) return { ok: true, accounts: [], expiresAt: null };
+  await serviceBrandCatalog(settings.cofferOrigin);
+  const vault = await publicVaultState(settings, page);
+  if (!vault.ok) return { ok: true, accounts: [], expiresAt: null };
+  return {
+    ok: true,
+    accounts: vault.pageMatches.map((account) => ({
+      code: account.code,
+      group: account.group,
+      identity: account.identity,
+      iconColor: account.iconColor,
+      iconDataUrl: account.iconDataUrl,
+      iconTitle: account.iconTitle,
+      iconUrl: account.iconUrl,
+      period: account.period,
+      rawCode: account.rawCode,
+      remaining: account.remaining,
+      service: account.service,
+    })),
+    expiresAt: vault.expiresAt,
+  };
+}
+
 async function sessionKeepalive() {
   const settings = await readSettings();
   const unlocked = await sessionIsAvailable(settings);
@@ -2128,9 +2193,10 @@ async function expireRememberedSession(sessionId) {
   }
 }
 
-function handleMessage(message) {
+function handleMessage(message, sender = null) {
   if (!isRecord(message) || typeof message.type !== "string") return false;
   if (message.type === "popup-state") return popupState();
+  if (message.type === "inline-suggestions") return inlineSuggestions(sender);
   if (message.type === "save-settings") return saveSettings(message.settings);
   if (message.type === "grant-permission") {
     const origin = normalizeCofferOrigin(message.origin);
@@ -2161,9 +2227,9 @@ browser.alarms?.onAlarm?.addListener((alarm) => {
   void expireRememberedSession(alarm.name.slice(SESSION_ALARM_PREFIX.length));
 });
 
-browser.runtime.onMessage.addListener((message) => {
+browser.runtime.onMessage.addListener((message, sender) => {
   try {
-    const response = handleMessage(message);
+    const response = handleMessage(message, sender);
     return response instanceof Promise
       ? response.catch((error) => unexpectedErrorResponse(error))
       : response;

@@ -266,6 +266,21 @@ input:focus {
   display: block;
 }
 
+.saved-login-options {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.saved-login-options legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .status-card {
   min-height: 46px;
   padding: 11px 12px;
@@ -367,8 +382,7 @@ input:focus {
   min-width: 0;
 }
 
-.code-copy strong,
-.code-identity {
+.code-copy strong {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -381,8 +395,37 @@ input:focus {
 }
 
 .code-identity {
+  min-width: 0;
+  display: block;
+  position: relative;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.code-identity-track {
+  display: inline-block;
+  min-width: max-content;
+  transform: translateX(0);
+}
+
+.code-identity.is-overflowing {
+  text-overflow: clip;
+}
+
+.code-identity.is-overflowing .code-identity-track {
+  animation: username-pan var(--username-overflow-duration) ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+.code-identity.is-overflowing:hover .code-identity-track {
+  animation-play-state: paused;
+}
+
+@keyframes username-pan {
+  0%, 15% { transform: translateX(0); }
+  85%, 100% { transform: translateX(calc(-1 * var(--username-overflow-distance))); }
 }
 
 .code-meta {
@@ -528,4 +571,15 @@ input:focus {
 button:disabled {
   opacity: .55;
   cursor: wait;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-identity.is-overflowing {
+    text-overflow: ellipsis;
+  }
+
+  .code-identity.is-overflowing .code-identity-track {
+    animation: none !important;
+    transform: none !important;
+  }
 }

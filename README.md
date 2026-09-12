@@ -13,7 +13,8 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - The extension connects directly to the configured Coffer API at `/api/vault`.
 - The Coffer tab does not need to be open.
 - The active browser tab URL is used only to prioritize matching codes in the popup.
-- The active page is filled only when the user clicks a code's **Fill** button.
+- The popup fills the active page only when the user clicks a code's **Fill** button.
+- On matching websites, focusing a likely one-time-code field opens an inline Coffer menu with account logos and a live period countdown; choosing an account fills its current code, including segmented digit fields.
 - After sign-in, the popup shows every active TOTP code in the encrypted vault.
 - Public service icon metadata is loaded from `/api/service-brands`; custom account icons come from the decrypted vault payload.
 - Codes can be copied by clicking the displayed code itself or filled directly into the active page with **Fill**.
@@ -24,13 +25,15 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 
 - The server returns the vault header and encrypted payload only.
 - TOTP secrets are decrypted inside the extension with the Coffer password.
-- The password is used for one unlock attempt and is not stored.
+- The password is used for one unlock attempt unless the user explicitly selects **Remember password on this device**. Email and password persistence are independent and can be disabled separately.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
 - When **Keep unlocked** is selected, only the minimum resume key material and session metadata are kept in extension-only, in-memory `storage.session`; the decrypted vault is fetched and decrypted again after a background restart.
 - The remembered session is capped at 12 hours and is cleared by **Lock**, expiry, a Coffer URL change, or the end of the browser session.
-- Persistent `storage.local` contains the configured Coffer URL, the popup privacy preference, and cached public service-icon metadata.
-- OTP codes are generated locally, are never written to extension storage, and reach the clipboard only after the displayed code is explicitly clicked.
-- The extension reads only the active tab URL while the popup is open, so page-specific codes can be shown first.
+- Persistent `storage.local` contains the configured Coffer URL, popup preferences, cached public service-icon metadata, and only the sign-in fields the user explicitly chooses to remember. A remembered password is stored in the browser profile's extension-only local storage, so this option should be used only on a trusted device.
+- OTP codes are generated locally and are never written to extension storage. A code reaches the clipboard only after the displayed code is explicitly clicked, or a matching page field after the user explicitly chooses an inline suggestion or clicks **Fill**.
+- The extension reads website URLs to match vault accounts and inspects focused form-field metadata locally to identify likely one-time-code fields.
+- The inline helper runs on HTTP and HTTPS pages, stays dormant unless a likely one-time-code field is focused, and receives matching account summaries only while Coffer is unlocked.
+- Page matching uses account text, service-brand catalog domains, and maintained provider families for shared sign-in domains such as Microsoft, Outlook, Hotmail, and Live.
 - A short page script is injected only after **Fill** is clicked; it receives the current TOTP code and writes it to a likely one-time-code field.
 - Coffer accepts browser-extension origins for the unlock/read API flow, while vault mutations stay restricted to the same-origin Coffer web app.
 - Coffer exposes `/api/service-brands` as public catalog metadata; it does not include vault data or secrets.

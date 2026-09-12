@@ -29,7 +29,9 @@ const browser = {
 const loadRuntime = new Function("browser", `
   ${source.slice(runtimeStart, runtimeEnd)}
   return {
+    accountMatchesPage,
     emptyBrandCatalog,
+    pageContextFromUrl,
     parseServiceBrandCatalog,
     readStoredServiceBrandCatalog,
     resolveServiceBrand,
@@ -37,7 +39,9 @@ const loadRuntime = new Function("browser", `
   };
 `);
 const {
+  accountMatchesPage,
   emptyBrandCatalog,
+  pageContextFromUrl,
   parseServiceBrandCatalog,
   readStoredServiceBrandCatalog,
   resolveServiceBrand,
@@ -53,6 +57,7 @@ const compactPayload = {
     ["twitter", "Twitter", "#1d79a8", true, ["twitter", "x"], ["twitter"], ["twitter.com"], true],
     ["bat", "Bat", "#111111", true, ["bat"], [], [], false],
     ["basicattentiontoken", "Basic Attention Token", "#222222", true, ["bat"], [], [], false],
+    ["microsoft", "Microsoft", "#5e5e5e", true, ["microsoft", "outlook"], ["microsoft"], ["live.com", "outlook.com", "microsoft.com"], true],
   ],
   selfhst: [["vaultwarden", "Vaultwarden", 7]],
 };
@@ -110,6 +115,14 @@ assert.equal(
   "https://coffer.example/brands/vaultwarden-alt-light.svg",
 );
 assert.equal(resolveServiceBrand("X", "coffer-initials", catalog, cofferOrigin), null);
+
+const livePage = pageContextFromUrl("https://login.live.com/oauth20_authorize.srf", {});
+const hotmailPage = pageContextFromUrl("https://www.hotmail.com/", {});
+assert.equal(accountMatchesPage({ service: "Microsoft", identity: "account@example.com" }, livePage, catalog, cofferOrigin), true);
+assert.equal(accountMatchesPage({ service: "Hotmail", identity: "account@example.com" }, livePage, catalog, cofferOrigin), true);
+assert.equal(accountMatchesPage({ service: "Microsoft", identity: "account@example.com" }, hotmailPage, catalog, cofferOrigin), true);
+assert.equal(accountMatchesPage({ service: "GitHub", identity: "account@example.com" }, livePage, catalog, cofferOrigin), false);
+assert.equal(accountMatchesPage({ service: "Live Chat", identity: "account@example.com" }, livePage, catalog, cofferOrigin), false);
 
 storageState.cofferServiceBrandCatalogV1 = {
   cofferOrigin,

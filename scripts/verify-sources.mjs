@@ -14,6 +14,7 @@ const expectedFiles = [
   "icons/coffer-mark-192.png",
   "icons/coffer-mark-48.png",
   "icons/coffer-mark-512.png",
+  "inline-autofill.js",
   "manifest.json",
   "popup/popup.css",
   "popup/popup.html",

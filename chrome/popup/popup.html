@@ -32,7 +32,7 @@
       </header>
 
       <section class="connection-card" id="connection-card" aria-label="Coffer URL">
-        <form id="connection-form" class="connection-form">
+        <form id="connection-form" class="connection-form" autocomplete="on">
           <label class="url-field">
             <span>Coffer URL</span>
             <span class="url-control">
@@ -52,6 +52,17 @@
               <span>Password</span>
               <input id="coffer-password" name="password" type="password" autocomplete="current-password">
             </label>
+            <fieldset class="saved-login-options">
+              <legend>Saved sign-in</legend>
+              <label class="remember-row">
+                <input id="coffer-remember-email" name="rememberEmail" type="checkbox">
+                <span>Remember email</span>
+              </label>
+              <label class="remember-row">
+                <input id="coffer-remember-password" name="rememberPassword" type="checkbox">
+                <span>Remember password on this device</span>
+              </label>
+            </fieldset>
             <label class="remember-row">
               <input id="coffer-remember" name="rememberLogin" type="checkbox">
               <span>Keep unlocked for up to 12 hours</span>
