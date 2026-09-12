@@ -36,7 +36,7 @@ Data handling:
 - Persistent extension storage contains the configured Coffer URL, popup preferences, cached public service-icon metadata, and only sign-in fields the user explicitly chooses to remember.
 - The Coffer password is used for one unlock attempt by default. It is persisted only when the user explicitly enables **Remember password on this device**, independently from **Remember email**, and is removed when that option is turned off.
 - Decrypted vault data, TOTP secrets, and WebCrypto key handles stay in extension background memory only.
-- If the user selects Keep unlocked, extension-only in-memory session storage holds only the minimum resume key material and bounded metadata for up to 12 hours. It is cleared on Lock, expiry, Coffer URL change, or browser-session end and is not persisted to disk.
+- If the user selects Keep unlocked, extension-only local storage holds only the minimum resume key material and bounded metadata for up to 12 hours so the session can survive a browser restart. It is cleared on Lock, expiry, or Coffer URL change and should be used only on a trusted device.
 - Generated TOTP codes are never written to extension storage and reach the clipboard or a page field only after the user explicitly selects that action.
 - HTTP and HTTPS page URLs and focused form-field metadata are inspected locally to match accounts and detect likely one-time-code fields. The inline helper stays dormant until such a field is focused.
 - Matching account summaries are sent to the page only while Coffer is unlocked; a current code is written to the field only after the user chooses a suggestion. The **Fill** button remains available as a manual alternative.

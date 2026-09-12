@@ -93,7 +93,7 @@ let sessionEpoch = 0;
 let sessionRestorePromise = null;
 let sessionRestoreWarning = "";
 let sessionRestoreBlocked = false;
-let sessionStorageTask = Promise.resolve();
+let rememberedSessionStorageTask = Promise.resolve();
 let brandCatalogCache = null;
 let brandCatalogOrigin = "";
 let brandCatalogPromise = null;
@@ -1293,8 +1293,8 @@ async function loginVault(cofferOrigin, identifier, authProof) {
   };
 }
 
-function sessionStorageArea() {
-  const area = browser.storage?.session;
+function rememberedSessionStorageArea() {
+  const area = browser.storage?.local;
   return area &&
     typeof area.get === "function" &&
     typeof area.remove === "function" &&
@@ -1356,15 +1356,15 @@ async function clearSessionExpiryAlarms(knownSessionId = null) {
   await Promise.all([...alarmNames].map((name) => browser.alarms.clear(name).catch(() => false)));
 }
 
-function runSessionStorageTask(operation) {
-  const task = sessionStorageTask.catch(() => {}).then(operation);
-  sessionStorageTask = task.then(() => undefined, () => undefined);
+function runRememberedSessionStorageTask(operation) {
+  const task = rememberedSessionStorageTask.catch(() => {}).then(operation);
+  rememberedSessionStorageTask = task.then(() => undefined, () => undefined);
   return task;
 }
 
 function readRememberedSession() {
-  return runSessionStorageTask(async () => {
-    const area = sessionStorageArea();
+  return runRememberedSessionStorageTask(async () => {
+    const area = rememberedSessionStorageArea();
     if (!area) return null;
     const stored = await area.get(SESSION_STORAGE_KEY);
     return stored?.[SESSION_STORAGE_KEY] ?? null;
@@ -1374,11 +1374,11 @@ function readRememberedSession() {
 async function removeRememberedSession(expectedSessionId = undefined, knownSessionId = null) {
   let result;
   try {
-    result = await runSessionStorageTask(async () => {
+    result = await runRememberedSessionStorageTask(async () => {
       if (expectedSessionId === undefined) {
         await clearSessionExpiryAlarms(knownSessionId);
       }
-      const area = sessionStorageArea();
+      const area = rememberedSessionStorageArea();
       if (!area) return { alarmId: expectedSessionId ?? null, invalidated: false };
       let candidateId = null;
       if (expectedSessionId !== undefined) {
@@ -1493,7 +1493,7 @@ function isTransientSessionRestoreFailure(response) {
 }
 
 async function persistRememberedSession(session, sessionKeyBytes) {
-  const area = sessionStorageArea();
+  const area = rememberedSessionStorageArea();
   if (!area) throw new Error("Session storage is unavailable.");
   const record = {
     format: SESSION_STORAGE_FORMAT,
@@ -1509,7 +1509,7 @@ async function persistRememberedSession(session, sessionKeyBytes) {
       vault: bytesToBase64(sessionKeyBytes.vaultKey),
     },
   };
-  await runSessionStorageTask(() => area.set({ [SESSION_STORAGE_KEY]: record }));
+  await runRememberedSessionStorageTask(() => area.set({ [SESSION_STORAGE_KEY]: record }));
   if (activeSession !== session) {
     await removeRememberedSession(record.sessionId).catch(() => {});
     throw new Error("The session changed while it was being remembered.");
@@ -1843,7 +1843,7 @@ async function unlockCoffer(credentials) {
         await removeRememberedSession(session.sessionId).catch(() => {});
         session.remembered = false;
         session.sessionId = null;
-        warning = "Coffer is unlocked, but this browser could not keep the session after the extension goes idle.";
+        warning = "Coffer is unlocked, but this browser could not keep the session across a browser restart.";
       }
     }
     return {

@@ -11,10 +11,10 @@ const runtimeStart = source.indexOf("const STORAGE_KEY");
 const runtimeEnd = source.indexOf("browser.alarms?.onAlarm?.addListener");
 assert.notEqual(runtimeStart, -1, "Could not find the extension runtime start.");
 assert.notEqual(runtimeEnd, -1, "Could not find the session alarm listener.");
-assert.match(compatSource, /storage\.session/u, "The Chrome compatibility layer must expose session storage.");
 assert.match(compatSource, /chromeApi\.alarms/u, "The Chrome compatibility layer must expose alarms.");
 assert.match(compatSource, /getAll: promisify\(chromeApi\.alarms, chromeApi\.alarms\.getAll\)/u);
-assert.match(source, /sessionStorageTask = task\.then\(\(\) => undefined, \(\) => undefined\);/u);
+assert.match(source, /const area = browser\.storage\?\.local;/u, "Remembered sessions must survive browser restarts.");
+assert.match(source, /rememberedSessionStorageTask = task\.then\(\(\) => undefined, \(\) => undefined\);/u);
 assert.match(source, /if \(credentials\.rememberLogin\) \{/u);
 assert.match(source, /await persistRememberedSession\(session, sessionKeyBytes\);/u);
 
@@ -150,7 +150,7 @@ function createBrowser(storageState, alarms, options = {}) {
   let beforeFirstAlarmCreate = options.beforeFirstAlarmCreate;
   let remainingGetFailures = options.failGetCount ?? 0;
   let remainingSetFailures = options.failSetCount ?? 0;
-  let beforeFirstSessionSet = options.beforeFirstSessionSet;
+  let beforeFirstStorageSet = options.beforeFirstStorageSet;
   return {
     alarms: {
       async clear(name) {
@@ -175,11 +175,6 @@ function createBrowser(storageState, alarms, options = {}) {
     },
     storage: {
       local: {
-        async get() {
-          return {};
-        },
-      },
-      session: {
         async get(key) {
           if (remainingGetFailures > 0) {
             remainingGetFailures -= 1;
@@ -192,9 +187,9 @@ function createBrowser(storageState, alarms, options = {}) {
           delete storageState[key];
         },
         async set(values) {
-          if (beforeFirstSessionSet) {
-            const beforeSet = beforeFirstSessionSet;
-            beforeFirstSessionSet = null;
+          if (beforeFirstStorageSet) {
+            const beforeSet = beforeFirstStorageSet;
+            beforeFirstStorageSet = null;
             await beforeSet();
           }
           if (remainingSetFailures > 0) {
@@ -203,6 +198,11 @@ function createBrowser(storageState, alarms, options = {}) {
           }
           Object.assign(storageState, structuredClone(values));
         },
+      },
+      session: {
+        async get() { return {}; },
+        async remove() {},
+        async set() {},
       },
     },
   };
@@ -381,7 +381,7 @@ const unlockClearStarted = deferred();
 const releaseUnlockClear = deferred();
 const unlockRaceRuntime = loadRuntime(
   createBrowser(unlockStorage, unlockAlarms, {
-    beforeFirstSessionSet: async () => {
+    beforeFirstStorageSet: async () => {
       unlockClearStarted.resolve();
       await releaseUnlockClear.promise;
     },
@@ -410,7 +410,7 @@ const firstUnlockClearStarted = deferred();
 const releaseFirstUnlockClear = deferred();
 const concurrentUnlockRuntime = loadRuntime(
   createBrowser(concurrentStorage, concurrentAlarms, {
-    beforeFirstSessionSet: async () => {
+    beforeFirstStorageSet: async () => {
       firstUnlockClearStarted.resolve();
       await releaseFirstUnlockClear.promise;
     },

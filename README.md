@@ -18,7 +18,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - After sign-in, the popup shows every active TOTP code in the encrypted vault.
 - Public service icon metadata is loaded from `/api/service-brands`; custom account icons come from the decrypted vault payload.
 - Codes can be copied by clicking the displayed code itself or filled directly into the active page with **Fill**.
-- **Keep unlocked** can retain an unlocked session for up to 12 hours, including across Manifest V3 background-worker restarts.
+- **Keep unlocked** can retain an unlocked session for up to 12 hours, including across browser and Manifest V3 background-worker restarts.
 - The popup starts with usernames masked and can reveal or mask them with its eye button; TOTP codes remain visible.
 
 ## Security model
@@ -27,8 +27,8 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - TOTP secrets are decrypted inside the extension with the Coffer password.
 - The password is used for one unlock attempt unless the user explicitly selects **Remember password on this device**. Email and password persistence are independent and can be disabled separately.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
-- When **Keep unlocked** is selected, only the minimum resume key material and session metadata are kept in extension-only, in-memory `storage.session`; the decrypted vault is fetched and decrypted again after a background restart.
-- The remembered session is capped at 12 hours and is cleared by **Lock**, expiry, a Coffer URL change, or the end of the browser session.
+- When **Keep unlocked** is selected, only the minimum resume key material and session metadata are kept for up to 12 hours in extension-only `storage.local`; the decrypted vault is fetched and decrypted again after a background or browser restart.
+- The remembered session is capped at 12 hours and is cleared by **Lock**, expiry, or a Coffer URL change. Because its resume key material is written to the browser profile, use this option only on a trusted device.
 - Persistent `storage.local` contains the configured Coffer URL, popup preferences, cached public service-icon metadata, and only the sign-in fields the user explicitly chooses to remember. A remembered password is stored in the browser profile's extension-only local storage, so this option should be used only on a trusted device.
 - OTP codes are generated locally and are never written to extension storage. A code reaches the clipboard only after the displayed code is explicitly clicked, or a matching page field after the user explicitly chooses an inline suggestion or clicks **Fill**.
 - The extension reads website URLs to match vault accounts and inspects focused form-field metadata locally to identify likely one-time-code fields.

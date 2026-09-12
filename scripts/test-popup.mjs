@@ -20,7 +20,7 @@ assert.doesNotMatch(popupHtml, />\s*All Codes\s*</u);
 assert.doesNotMatch(popupHtml, /id="codes-title"/u);
 assert.match(popupHtml, /id="all-codes" aria-label="All codes"/u);
 assert.match(popupHtml, /id="copy-status" role="status" aria-live="polite"/u);
-assert.match(popupHtml, />Keep unlocked for up to 12 hours</u);
+assert.match(popupHtml, />Keep unlocked for up to 12 hours, including browser restarts</u);
 assert.match(popupHtml, /id="connection-form" class="connection-form" autocomplete="on"/u);
 assert.match(popupHtml, /id="coffer-email"[^>]*autocomplete="username"/u);
 assert.match(popupHtml, /id="coffer-password"[^>]*autocomplete="current-password"/u);
