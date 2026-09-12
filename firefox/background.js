@@ -5,6 +5,7 @@ import "./vendor/argon2.umd.min.js";
 
 const STORAGE_KEY = "cofferAutofillSettings";
 const BRAND_CATALOG_STORAGE_KEY = "cofferServiceBrandCatalogV1";
+const SAVED_LOGIN_STORAGE_KEY = "cofferSavedLoginV1";
 const SESSION_STORAGE_KEY = "cofferUnlockedSessionV1";
 const SESSION_STORAGE_FORMAT = "coffer-extension-unlocked-session";
 const SESSION_STORAGE_VERSION = 1;
@@ -93,6 +94,7 @@ let sessionEpoch = 0;
 let sessionRestorePromise = null;
 let sessionRestoreWarning = "";
 let sessionRestoreBlocked = false;
+let sessionRecoveryContext = null;
 let rememberedSessionStorageTask = Promise.resolve();
 let brandCatalogCache = null;
 let brandCatalogOrigin = "";
@@ -1269,11 +1271,12 @@ async function identifyVault(cofferOrigin, identifier) {
   };
 }
 
-async function loginVault(cofferOrigin, identifier, authProof) {
+async function loginVault(cofferOrigin, identifier, authProof, rememberLogin = false) {
   const response = await requestVault(cofferOrigin, {
     action: "login",
     identifier,
     authProof,
+    ...(rememberLogin ? { rememberLogin: true } : {}),
   });
   if (!response.ok) return response;
   if (!isRecord(response.body) || !isRecord(response.body.payload) || !Number.isSafeInteger(response.body.revision)) {
@@ -1421,6 +1424,7 @@ async function removeRememberedSession(expectedSessionId = undefined, knownSessi
 async function clearSession() {
   const knownSessionId = activeSession?.sessionId ?? null;
   sessionRestoreBlocked = true;
+  sessionRecoveryContext = null;
   const clearedEpoch = ++sessionEpoch;
   activeSession = null;
   sessionRestoreWarning = "";
@@ -1431,6 +1435,7 @@ async function clearSession() {
 async function clearSessionIfCurrent(session) {
   if (!session || activeSession !== session) return false;
   sessionRestoreBlocked = true;
+  sessionRecoveryContext = null;
   sessionEpoch += 1;
   activeSession = null;
   sessionRestoreWarning = "";
@@ -1529,24 +1534,32 @@ async function restoreRememberedSession(settings) {
   const promise = (async () => {
     let record = null;
     let sessionKeyBytes = null;
+    let restoreStage = "reading the saved session";
     try {
       record = await readRememberedSession();
       if (!record) {
-        if (sessionEpoch === expectedEpoch) sessionRestoreWarning = "";
+        if (sessionEpoch === expectedEpoch) {
+          sessionRecoveryContext = null;
+          sessionRestoreWarning = "";
+        }
         return false;
       }
       if (Number.isSafeInteger(record.expiresAt) && record.expiresAt <= Date.now()) {
+        sessionRecoveryContext = null;
         sessionRestoreWarning = "";
         const expiredRecordId = typeof record.sessionId === "string" ? record.sessionId : undefined;
         await removeRememberedSession(expiredRecordId).catch(() => {});
         return false;
       }
+      restoreStage = "validating the saved session";
       sessionKeyBytes = decodeRememberedSession(record, settings);
+      restoreStage = "restoring the expiry timer";
       if (!(await hasSessionExpiryAlarm(record))) {
-        throw new Error("The remembered session expiry marker is missing.");
+        await scheduleSessionExpiry(record.sessionId, record.expiresAt);
       }
       if (sessionEpoch !== expectedEpoch) return false;
 
+      restoreStage = "identifying the saved vault";
       const identified = await identifyVault(record.cofferOrigin, record.identifier);
       if (!identified.ok) {
         if (isTransientSessionRestoreFailure(identified)) {
@@ -1559,12 +1572,14 @@ async function restoreRememberedSession(settings) {
         throw new Error("The remembered vault has changed.");
       }
 
+      restoreStage = "importing the saved resume keys";
       const runtime = {
         authKey: await importAuthKey(sessionKeyBytes.authKey),
         vaultKey: await importAesKey(sessionKeyBytes.vaultKey, ["encrypt", "decrypt"]),
       };
       const authProof = await createAuthProof(runtime.authKey);
-      const login = await loginVault(record.cofferOrigin, record.identifier, authProof);
+      restoreStage = "signing in to the saved vault";
+      const login = await loginVault(record.cofferOrigin, record.identifier, authProof, true);
       if (!login.ok) {
         if (isTransientSessionRestoreFailure(login)) {
           sessionRestoreWarning = "Coffer could not restore the unlocked session while the server is unavailable.";
@@ -1572,6 +1587,7 @@ async function restoreRememberedSession(settings) {
         }
         throw new Error("The remembered session is no longer accepted.");
       }
+      restoreStage = "decrypting the saved vault";
       const decrypted = await decryptVaultPayload(login.payload, runtime.vaultKey);
       const vault = parseVaultPayload(decrypted);
       if (sessionEpoch !== expectedEpoch || record.expiresAt <= Date.now()) return false;
@@ -1596,16 +1612,27 @@ async function restoreRememberedSession(settings) {
       };
       activeSession = restoredSession;
       sessionRestoreBlocked = false;
+      sessionRecoveryContext = null;
       sessionRestoreWarning = "";
       return true;
     } catch {
       if (sessionEpoch === expectedEpoch) {
         sessionRestoreBlocked = true;
-        sessionRestoreWarning = "The saved Coffer session is no longer valid. Unlock Coffer again.";
+        sessionRecoveryContext = isRecord(record) &&
+          typeof record.cofferOrigin === "string" &&
+          typeof record.identifier === "string" &&
+          Number.isSafeInteger(record.expiresAt) &&
+          record.expiresAt > Date.now()
+          ? { cofferOrigin: record.cofferOrigin, identifier: record.identifier }
+          : null;
+        sessionRestoreWarning = `The saved Coffer session could not be restored while ${restoreStage}. Unlock Coffer again.`;
         const recordId = isRecord(record) && typeof record.sessionId === "string"
           ? record.sessionId
           : undefined;
         await removeRememberedSession(recordId).catch(() => {});
+        if (sessionRecoveryContext && await recoverRememberedSessionWithSavedPassword(settings)) {
+          return true;
+        }
       }
       return false;
     } finally {
@@ -1618,6 +1645,38 @@ async function restoreRememberedSession(settings) {
   } finally {
     if (sessionRestorePromise === promise) sessionRestorePromise = null;
   }
+}
+
+async function recoverRememberedSessionWithSavedPassword(settings) {
+  const context = sessionRecoveryContext;
+  if (
+    !context ||
+    context.cofferOrigin !== settings.cofferOrigin ||
+    typeof context.identifier !== "string"
+  ) return false;
+  sessionRecoveryContext = null;
+  let saved;
+  try {
+    const stored = await browser.storage.local.get(SAVED_LOGIN_STORAGE_KEY);
+    saved = stored?.[SAVED_LOGIN_STORAGE_KEY];
+  } catch {
+    return false;
+  }
+  if (
+    !isRecord(saved) ||
+    typeof saved.email !== "string" ||
+    typeof saved.password !== "string" ||
+    saved.email.trim() !== context.identifier ||
+    !saved.password
+  ) return false;
+  const recovery = await unlockCoffer({
+    identifier: saved.email,
+    password: saved.password,
+    rememberLogin: true,
+  });
+  if (recovery?.ok) return true;
+  sessionRestoreWarning = `The saved Coffer session and saved-password recovery both failed. ${recovery?.error?.message ?? "Unlock Coffer again."}`;
+  return false;
 }
 
 async function sessionIsAvailable(settings) {
@@ -1712,7 +1771,10 @@ async function publicVaultState(settings = null, pageOverride = undefined) {
 async function popupState() {
   const settings = await readSettings();
   const hasPermission = await hasCofferPermission(settings.cofferOrigin);
-  const unlocked = hasPermission ? await sessionIsAvailable(settings) : false;
+  let unlocked = hasPermission ? await sessionIsAvailable(settings) : false;
+  if (!unlocked && hasPermission && sessionRecoveryContext) {
+    unlocked = await recoverRememberedSessionWithSavedPassword(settings);
+  }
   if (!hasPermission) await clearSession();
   const cofferUrl = settings.cofferOrigin ? new URL(settings.cofferOrigin) : null;
   const insecureOrigin = cofferUrl !== null && cofferUrl.protocol === "http:" && !isLocalHost(cofferUrl.hostname);
@@ -1810,7 +1872,7 @@ async function unlockCoffer(credentials) {
 
   try {
     const authProof = await createAuthProof(runtime.authKey);
-    const login = await loginVault(settings.cofferOrigin, identifier, authProof);
+    const login = await loginVault(settings.cofferOrigin, identifier, authProof, credentials.rememberLogin);
     if (!login.ok) return login;
     const decrypted = await decryptVaultPayload(login.payload, runtime.vaultKey);
     const vault = parseVaultPayload(decrypted);
@@ -1874,7 +1936,7 @@ async function refreshVault() {
   if (!session) return await publicVaultState(settings);
   const authProof = await createAuthProof(session.runtime.authKey);
   if (activeSession !== session) return await publicVaultState(settings);
-  const login = await loginVault(settings.cofferOrigin, session.identifier, authProof);
+  const login = await loginVault(settings.cofferOrigin, session.identifier, authProof, session.remembered);
   if (activeSession !== session) return await publicVaultState(settings);
   if (!login.ok) {
     if (session.remembered && !isTransientSessionRestoreFailure(login)) {

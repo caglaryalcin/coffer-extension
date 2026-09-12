@@ -26,8 +26,11 @@ assert.match(popupHtml, /id="coffer-email"[^>]*autocomplete="username"/u);
 assert.match(popupHtml, /id="coffer-password"[^>]*autocomplete="current-password"/u);
 assert.match(popupHtml, /id="coffer-remember-email"[^>]*type="checkbox"/u);
 assert.match(popupHtml, /id="coffer-remember-password"[^>]*type="checkbox"/u);
+assert.match(popupHtml, /id="toggle-privacy"[^>]*aria-pressed="false"[^>]*title="Hide usernames"/u);
 
 assert.match(popupSource, /const value = String\(account\.rawCode \|\| ""\);/u);
+assert.match(popupSource, /let usernamesMasked = false;/u);
+assert.match(popupSource, /usernamesMasked = stored\?\.\[PRIVACY_STORAGE_KEY\] === true;/u);
 assert.match(popupSource, /const code = document\.createElement\("button"\);/u);
 assert.match(popupSource, /code\.type = "button";/u);
 assert.match(popupSource, /code\.addEventListener\("pointerenter",[\s\S]*?code\.classList\.add\("pointer-hover"\);/u);

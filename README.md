@@ -19,13 +19,13 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - Public service icon metadata is loaded from `/api/service-brands`; custom account icons come from the decrypted vault payload.
 - Codes can be copied by clicking the displayed code itself or filled directly into the active page with **Fill**.
 - **Keep unlocked** can retain an unlocked session for up to 12 hours, including across browser and Manifest V3 background-worker restarts.
-- The popup starts with usernames masked and can reveal or mask them with its eye button; TOTP codes remain visible.
+- The popup starts with usernames visible and can hide or reveal them with its eye button; TOTP codes remain visible.
 
 ## Security model
 
 - The server returns the vault header and encrypted payload only.
 - TOTP secrets are decrypted inside the extension with the Coffer password.
-- The password is used for one unlock attempt unless the user explicitly selects **Remember password on this device**. Email and password persistence are independent and can be disabled separately.
+- The password is used for one unlock attempt unless the user explicitly selects **Remember password on this device**. Email and password persistence are independent and can be disabled separately. When both **Remember password** and **Keep unlocked** are selected, the saved password can automatically recover an unexpired session if its resume key is rejected after a browser restart.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
 - When **Keep unlocked** is selected, only the minimum resume key material and session metadata are kept for up to 12 hours in extension-only `storage.local`; the decrypted vault is fetched and decrypted again after a background or browser restart.
 - The remembered session is capped at 12 hours and is cleared by **Lock**, expiry, or a Coffer URL change. Because its resume key material is written to the browser profile, use this option only on a trusted device.

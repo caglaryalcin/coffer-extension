@@ -17,6 +17,7 @@ assert.match(source, /const area = browser\.storage\?\.local;/u, "Remembered ses
 assert.match(source, /rememberedSessionStorageTask = task\.then\(\(\) => undefined, \(\) => undefined\);/u);
 assert.match(source, /if \(credentials\.rememberLogin\) \{/u);
 assert.match(source, /await persistRememberedSession\(session, sessionKeyBytes\);/u);
+assert.match(source, /\.\.\.\(rememberLogin \? \{ rememberLogin: true \} : \{\}\)/u);
 
 for (const browserName of ["chrome", "firefox"]) {
   const manifest = JSON.parse(await readFile(resolve(rootDir, browserName, "manifest.json"), "utf8"));
@@ -25,6 +26,7 @@ for (const browserName of ["chrome", "firefox"]) {
 }
 
 const SESSION_KEY = "cofferUnlockedSessionV1";
+const SAVED_LOGIN_KEY = "cofferSavedLoginV1";
 const SESSION_FORMAT = "coffer-extension-unlocked-session";
 const COFFER_ORIGIN = "https://coffer.example";
 const IDENTIFIER = "owner@example.com";
@@ -230,6 +232,7 @@ const loadRuntime = new Function("browser", "fetch", "crypto", "hooks", `
     getSessionEpoch: () => sessionEpoch,
     getSessionRestoreWarning: () => sessionRestoreWarning,
     persistRememberedSession,
+    popupState,
     removeRememberedSession,
     sessionIsAvailable,
     setActiveSession: (session) => { activeSession = session; },
@@ -264,8 +267,14 @@ function createUnlockHooks() {
     async identifyVault(_origin, identifier) {
       return { ok: true, header: { vaultId: VAULT_ID }, identifier };
     },
-    async unlockVaultHeader() {
-      return { authKey: {}, vaultKey: {}, sessionKeyBytes: null };
+    async unlockVaultHeader(_password, _header, retainSessionKeys) {
+      return {
+        authKey: {},
+        vaultKey: {},
+        sessionKeyBytes: retainSessionKeys
+          ? { authKey: authKeyBytes.slice(), vaultKey: vaultKeyBytes.slice() }
+          : null,
+      };
     },
     async createAuthProof() {
       return "proof";
@@ -342,7 +351,12 @@ assert.throws(
 );
 
 const restartFetches = [];
-const restartedRuntime = loadRuntime(createBrowser(storageState, alarms), createFetch(restartFetches), crypto);
+const restartedAlarms = new Map();
+const restartedRuntime = loadRuntime(
+  createBrowser(storageState, restartedAlarms),
+  createFetch(restartFetches),
+  crypto,
+);
 const restored = await Promise.all([
   restartedRuntime.sessionIsAvailable({ cofferOrigin: COFFER_ORIGIN }),
   restartedRuntime.sessionIsAvailable({ cofferOrigin: COFFER_ORIGIN }),
@@ -350,10 +364,55 @@ const restored = await Promise.all([
 ]);
 assert.deepEqual(restored, [true, true, true]);
 assert.deepEqual(restartFetches, ["identify", "login"], "Concurrent callers must share one restore.");
+assert.equal(
+  restartedAlarms.get(`coffer-session-expiry:${storedRecord.sessionId}`)?.when,
+  storedRecord.expiresAt,
+  "A browser restart must recreate the expiry alarm from the persistent session record.",
+);
 const activeSession = restartedRuntime.getActiveSession();
 assert.equal(activeSession.vault.accounts[0].secret, TOTP_SECRET);
 assert.equal(activeSession.runtime.authKey.extractable, false);
 assert.equal(activeSession.runtime.vaultKey.extractable, false);
+
+const recoveryStorage = {
+  [SESSION_KEY]: structuredClone(storedRecord),
+  [SAVED_LOGIN_KEY]: {
+    email: IDENTIFIER,
+    password: "correct horse battery staple",
+  },
+};
+const recoveryAlarms = new Map();
+const recoveryHooks = createUnlockHooks();
+let recoveryLoginAttempts = 0;
+recoveryHooks.loginVault = async (_origin, identifier, _proof, rememberLogin) => {
+  recoveryLoginAttempts += 1;
+  assert.equal(identifier, IDENTIFIER);
+  assert.equal(rememberLogin, true, "Remembered sign-ins must renew the server-side session lifetime.");
+  if (recoveryLoginAttempts === 1) {
+    return {
+      ok: false,
+      error: { code: "invalid_credentials", message: "The saved resume proof was rejected." },
+    };
+  }
+  return { ok: true, payload: {}, revision: 9 };
+};
+const recoveryRuntime = loadRuntime(
+  createBrowser(recoveryStorage, recoveryAlarms),
+  createFetch([]),
+  crypto,
+  recoveryHooks,
+);
+const recoveredPopup = await recoveryRuntime.popupState();
+assert.equal(recoveredPopup.coffer?.ok, true, "A saved password must recover a rejected remembered session.");
+assert.equal(recoveredPopup.sessionWarning, "");
+assert.equal(recoveryLoginAttempts, 2, "Recovery must retry sign-in exactly once with the saved password.");
+assert.equal(recoveryRuntime.getActiveSession()?.remembered, true);
+assert.equal(typeof recoveryStorage[SESSION_KEY]?.sessionId, "string");
+assert.equal(
+  recoveryAlarms.get(`coffer-session-expiry:${recoveryStorage[SESSION_KEY].sessionId}`)?.when,
+  recoveryStorage[SESSION_KEY].expiresAt,
+  "Saved-password recovery must persist a fresh bounded session.",
+);
 
 storageState[SESSION_KEY] = structuredClone(storedRecord);
 let releaseIdentify;
@@ -561,11 +620,7 @@ assert.equal(
 );
 assert.equal(alarms.has(storedAlarmName), false, "A failed Lock must revoke the session alarm marker.");
 
-const recoveredFetches = [];
-const recoveredRuntime = loadRuntime(createBrowser(storageState, alarms), createFetch(recoveredFetches), crypto);
-assert.equal(await recoveredRuntime.sessionIsAvailable({ cofferOrigin: COFFER_ORIGIN }), false);
-assert.deepEqual(recoveredFetches, [], "A missing expiry marker must reject a stale record before network access.");
-assert.equal(Object.hasOwn(storageState, SESSION_KEY), false);
+delete storageState[SESSION_KEY];
 
 for (const transientCode of [
   "corrupt_store",
@@ -612,4 +667,4 @@ assert.equal(expiredRuntime.getSessionRestoreWarning(), "", "A missing session m
 
 vaultKeyBytes.fill(0);
 authKeyBytes.fill(0);
-console.log("Verified remembered-session persistence, restore, expiry, and lock race handling.");
+console.log("Verified browser-restart persistence, expiry-alarm recreation, saved-password recovery, and lock race handling.");

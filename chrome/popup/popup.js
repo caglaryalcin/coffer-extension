@@ -32,7 +32,7 @@ const MAX_USERNAME_SCROLL_SECONDS = 12;
 
 let latestCodes = [];
 let latestPageCodes = [];
-let usernamesMasked = true;
+let usernamesMasked = false;
 let refreshPromise = null;
 let refreshQueued = false;
 let uiEpoch = 0;
@@ -564,9 +564,9 @@ function updatePrivacyButton() {
 async function loadPrivacyPreference() {
   try {
     const stored = await browser.storage.local.get(PRIVACY_STORAGE_KEY);
-    usernamesMasked = stored?.[PRIVACY_STORAGE_KEY] !== false;
+    usernamesMasked = stored?.[PRIVACY_STORAGE_KEY] === true;
   } catch {
-    usernamesMasked = true;
+    usernamesMasked = false;
   }
   updatePrivacyButton();
 }

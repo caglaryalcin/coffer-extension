@@ -34,7 +34,7 @@ This extension is a companion client for a user-configured self-hosted Coffer se
 Data handling:
 - No telemetry, analytics, advertising, or third-party tracking.
 - Persistent extension storage contains the configured Coffer URL, popup preferences, cached public service-icon metadata, and only sign-in fields the user explicitly chooses to remember.
-- The Coffer password is used for one unlock attempt by default. It is persisted only when the user explicitly enables **Remember password on this device**, independently from **Remember email**, and is removed when that option is turned off.
+- The Coffer password is used for one unlock attempt by default. It is persisted only when the user explicitly enables **Remember password on this device**, independently from **Remember email**, and is removed when that option is turned off. If **Keep unlocked** is also enabled, the saved password may automatically recover an unexpired session when normal resume fails after a browser restart.
 - Decrypted vault data, TOTP secrets, and WebCrypto key handles stay in extension background memory only.
 - If the user selects Keep unlocked, extension-only local storage holds only the minimum resume key material and bounded metadata for up to 12 hours so the session can survive a browser restart. It is cleared on Lock, expiry, or Coffer URL change and should be used only on a trusted device.
 - Generated TOTP codes are never written to extension storage and reach the clipboard or a page field only after the user explicitly selects that action.

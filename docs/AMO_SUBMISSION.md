@@ -31,7 +31,7 @@ Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
 ## Data Handling
 
 - The extension does not collect analytics or telemetry.
-- The Coffer password is not stored by default. It is persisted in extension-only local storage only when the user explicitly selects **Remember password on this device**, independently of the email option, and is removed when that option is turned off.
+- The Coffer password is not stored by default. It is persisted in extension-only local storage only when the user explicitly selects **Remember password on this device**, independently of the email option, and is removed when that option is turned off. If **Keep unlocked** is also selected, that saved password may automatically recover an unexpired session when normal resume fails after a browser restart.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
 - **Keep unlocked** stores only resume key material and bounded session metadata in extension-only `storage.local` for up to 12 hours. It does not store the decrypted vault, password, TOTP secrets, or generated codes there, and should be enabled only on a trusted device.
 - TOTP codes are generated locally and are never written to extension storage. A code is written to the clipboard or a page field only after the user explicitly selects that action.
