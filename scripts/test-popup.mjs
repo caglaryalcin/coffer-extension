@@ -169,7 +169,7 @@ assert.match(inlineSource, /event\.key === "Enter"/u);
 assert.match(inlineSource, /setNativeValue\(field, code\);/u);
 assert.match(backgroundSource, /if \(message\.type === "inline-suggestions"\) return inlineSuggestions\(sender\);/u);
 assert.match(backgroundSource, /accounts: vault\.pageMatches\.map\(\(account\) => \(\{/u);
-assert.match(backgroundSource, /iconUrl: account\.iconUrl,/u);
+assert.match(backgroundSource, /iconSvg: logos\.get\(account\.iconUrl\) \?\? null,/u);
 assert.match(backgroundSource, /period: account\.period,/u);
 
 const copyStart = popupSource.indexOf("async function copyCode");
@@ -534,4 +534,103 @@ for (const browser of ["chrome", "firefox"]) {
   }]);
 }
 
-console.log("Verified popup copy behavior, saved sign-in fields, username animation, and inline autofill wiring.");
+const reloadStart = popupSource.indexOf("async function reloadVault");
+const reloadEnd = popupSource.indexOf("function setUnlockPending", reloadStart);
+assert.notEqual(reloadStart, -1);
+assert.notEqual(reloadEnd, -1);
+
+function reloadVaultHarness({ hidden = false } = {}) {
+  const observed = { messages: [], applied: [], warnings: [], refreshes: [] };
+  const refreshVaultButton = {
+    disabled: false,
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+  };
+  let resolveResponse;
+  let rejectResponse;
+  const response = new Promise((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
+  });
+  const runtime = new Function(
+    "browser", "vaultTools", "refreshVaultButton", "applyVaultState", "setStatus",
+    "refresh", "errorMessage", "caughtErrorMessage",
+    `
+      let vaultReloadPending = false;
+      let uiEpoch = 0;
+      ${popupSource.slice(reloadStart, reloadEnd)}
+      return {
+        reloadVault,
+        invalidate: () => { uiEpoch += 1; vaultTools.hidden = true; },
+        rollover: () => { uiEpoch += 1; },
+      };
+    `,
+  )(
+    { runtime: { sendMessage(message) { observed.messages.push(message); return response; } } },
+    { hidden },
+    refreshVaultButton,
+    (vault) => observed.applied.push(vault),
+    (message, tone) => observed.warnings.push({ message, tone }),
+    async (options) => { observed.refreshes.push(options); },
+    (result, fallback) => result?.error?.message ?? fallback,
+    (error, fallback) => error?.message ?? fallback,
+  );
+  return { ...runtime, observed, refreshVaultButton, resolveResponse, rejectResponse };
+}
+
+const reload = reloadVaultHarness();
+const reloading = reload.reloadVault();
+assert.equal(reload.refreshVaultButton.disabled, true);
+assert.equal(reload.refreshVaultButton.attributes["aria-busy"], "true");
+await reload.reloadVault();
+assert.deepEqual(reload.observed.messages, [{ type: "refresh-vault" }], "Repeated clicks must not start duplicate reloads.");
+const refreshedVault = { ok: true, accounts: [{ id: "updated" }], pageMatches: [{ id: "updated" }] };
+reload.resolveResponse({ ok: true, vault: refreshedVault });
+await reloading;
+assert.deepEqual(reload.observed.applied, [refreshedVault], "Server changes must replace displayed accounts and matches.");
+assert.equal(reload.refreshVaultButton.disabled, false);
+assert.equal(Object.hasOwn(reload.refreshVaultButton.attributes, "aria-busy"), false);
+
+const reloadAfterLock = reloadVaultHarness();
+const staleReload = reloadAfterLock.reloadVault();
+reloadAfterLock.invalidate();
+reloadAfterLock.resolveResponse({ ok: true, vault: refreshedVault });
+await staleReload;
+assert.deepEqual(reloadAfterLock.observed.applied, [], "An in-flight reload must not reopen a locked or replaced popup.");
+assert.deepEqual(reloadAfterLock.observed.refreshes, [], "A stale reload must not refresh a locked popup.");
+assert.equal(reloadAfterLock.refreshVaultButton.disabled, false);
+
+const rolloverReload = reloadVaultHarness();
+const rolloverRequest = rolloverReload.reloadVault();
+rolloverReload.rollover();
+rolloverReload.resolveResponse({ ok: true, vault: refreshedVault });
+await rolloverRequest;
+assert.deepEqual(rolloverReload.observed.applied, []);
+assert.deepEqual(
+  rolloverReload.observed.refreshes,
+  [{ force: true }],
+  "A code rollover during reload must fetch the updated background vault immediately.",
+);
+
+const unavailableReload = reloadVaultHarness({ hidden: true });
+await unavailableReload.reloadVault();
+assert.deepEqual(unavailableReload.observed.messages, [], "A locked popup must not start a reload.");
+
+const failedReload = reloadVaultHarness();
+const failingReload = failedReload.reloadVault();
+failedReload.resolveResponse({ ok: false, error: { message: "Session expired." } });
+await failingReload;
+assert.deepEqual(failedReload.observed.applied, []);
+assert.deepEqual(failedReload.observed.refreshes, [{ force: true }]);
+assert.deepEqual(failedReload.observed.warnings, [{ message: "Session expired.", tone: "warning" }]);
+
+const offlineReload = reloadVaultHarness();
+const offlineRequest = offlineReload.reloadVault();
+offlineReload.rejectResponse(new Error("Connection unavailable."));
+await offlineRequest;
+assert.deepEqual(offlineReload.observed.applied, []);
+assert.deepEqual(offlineReload.observed.warnings, [{ message: "Connection unavailable.", tone: "warning" }]);
+assert.equal(offlineReload.refreshVaultButton.disabled, false);
+
+console.log("Verified popup copy behavior, saved sign-in fields, username animation, inline autofill wiring, and vault reload races.");

@@ -10,6 +10,10 @@ When you sign in, the extension sends your account identifier and a password-der
 
 The extension runs an inline helper on HTTP and HTTPS pages. It reads the page URL and focused form-field metadata locally to identify likely one-time-code fields and request only matching account summaries while Coffer is unlocked. Choosing an inline suggestion writes the selected current code into that field. Clicking a displayed popup code writes only that current code to the system clipboard; clicking **Fill** injects a short one-time script into the active tab to perform the same field-filling action.
 
+Website URLs saved on Coffer cards remain part of the encrypted vault and are read only into extension background memory. When a card has URLs, they restrict inline suggestions and popup filling; matching uses the target frame's own address and does not send the card's URL list to page scripts. Accounts without URLs retain legacy matching. The Refresh vault button reloads the encrypted vault from your configured Coffer server.
+
 The extension loads public service icon metadata and icon files from the configured Coffer server and may cache that public metadata locally. This metadata does not include vault contents, account secrets, passwords, or generated TOTP codes.
+
+Inline brand logos are fetched anonymously by the extension background only from the configured Coffer server's brand directory, with redirects disabled. The inline menu receives sanitized SVG geometry instead of private server image URLs; custom PNG icons are drawn locally on a canvas. Viewing inline logos does not make the target website request images from your Coffer server.
 
 The extension communicates over the network only with the Coffer server URL you configure. Website matching and form-field inspection happen locally in the browser.

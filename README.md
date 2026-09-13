@@ -12,11 +12,12 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 
 - The extension connects directly to the configured Coffer API at `/api/vault`.
 - The Coffer tab does not need to be open.
-- The active browser tab URL is used only to prioritize matching codes in the popup.
+- The active browser tab URL is used to prioritize matching codes and enforce saved Website URLs when filling.
 - The popup fills the active page only when the user clicks a code's **Fill** button.
 - On matching websites, focusing a likely one-time-code field opens an inline Coffer menu with account logos and a live period countdown; choosing an account fills its current code, including segmented digit fields.
 - After sign-in, the popup shows every active TOTP code in the encrypted vault.
 - Public service icon metadata is loaded from `/api/service-brands`; custom account icons come from the decrypted vault payload.
+- Inline brand logos are fetched by the extension from the configured Coffer server and rendered as sanitized SVG geometry. Custom PNG logos are drawn locally on a canvas, so the menu does not rely on the target page allowing external images.
 - Codes can be copied by clicking the displayed code itself or filled directly into the active page with **Fill**.
 - **Keep unlocked** can retain an unlocked session for up to 12 hours, including across browser and Manifest V3 background-worker restarts.
 - The popup starts with usernames visible and can hide or reveal them with its eye button; TOTP codes remain visible.
@@ -33,11 +34,21 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - OTP codes are generated locally and are never written to extension storage. A code reaches the clipboard only after the displayed code is explicitly clicked, or a matching page field after the user explicitly chooses an inline suggestion or clicks **Fill**.
 - The extension reads website URLs to match vault accounts and inspects focused form-field metadata locally to identify likely one-time-code fields.
 - The inline helper runs on HTTP and HTTPS pages, stays dormant unless a likely one-time-code field is focused, and receives matching account summaries only while Coffer is unlocked.
-- Page matching uses account text, service-brand catalog domains, and maintained provider families for shared sign-in domains such as Microsoft, Outlook, Hotmail, and Live.
+- Accounts with saved Website URLs are matched only against those URLs. Accounts without URLs retain the existing service-name, email-domain, brand-catalog, and provider-family matching.
 - A short page script is injected only after **Fill** is clicked; it receives the current TOTP code and writes it to a likely one-time-code field.
 - Coffer accepts browser-extension origins for the unlock/read API flow, while vault mutations stay restricted to the same-origin Coffer web app.
 - Coffer exposes `/api/service-brands` as public catalog metadata; it does not include vault data or secrets.
 - Use HTTPS for self-hosted Coffer URLs except local development on `localhost`.
+
+## Website matching
+
+- Add one or more **Website URLs** to a card in Coffer. The extension supports the current multiple-URL format and the older single-URL format.
+- A saved address matches its hostname and subdomains with the same protocol and port. For example, `https://example.com` also matches `https://login.example.com`, but not `http://example.com`, `https://example.com:8443`, or `https://example.com.other.test`. IP addresses, localhost, and single-label hosts match exactly.
+- Paths, query strings, and fragments do not restrict matching. Add every separate sign-in domain you use; a saved `hotmail.com` address does not authorize a redirect to `login.live.com` unless that address is also listed.
+- When URLs are present, a service name, email address, or logo cannot add more matching sites. Both inline suggestions and popup **Fill** respect these addresses. Copying a code manually remains available.
+- Inline suggestions use the URL of the frame containing the code field. Unrelated or opaque frames cannot inherit matching accounts from the parent page. Popup **Fill** targets the main page; use the inline menu for fields inside an iframe.
+
+After changing a card in Coffer, click **Refresh vault** in the extension header to load its latest URLs and codes without signing in again.
 
 ## Temporary Install
 

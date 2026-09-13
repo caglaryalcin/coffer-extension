@@ -15,6 +15,7 @@
   let countdownTimer = null;
   let positionFrame = null;
   let suggestionsReceivedAt = 0;
+  let logoSequence = 0;
 
   const host = document.createElement("div");
   host.id = HOST_ID;
@@ -75,7 +76,7 @@
       font-weight: 800;
     }
     .logo.has-icon { overflow: hidden; padding: 3px; background: #fff; }
-    .logo img { width: 22px; height: 22px; display: block; object-fit: contain; }
+    .logo svg, .logo canvas { width: 22px; height: 22px; display: block; }
     .copy { min-width: 0; }
     .service, .identity { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .service { font-size: 13px; font-weight: 650; }
@@ -279,26 +280,86 @@
     }
   }
 
+  function createSvgLogo(tree) {
+    const prefix = `coffer-logo-${++logoSequence}-`;
+    const tags = new Set([
+      "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+      "defs", "linearGradient", "radialGradient", "stop", "clipPath", "mask", "use", "pattern",
+    ]);
+    let nodes = 0;
+    function createNode(node, depth = 0) {
+      if (!node || !tags.has(node.tag) || depth > 64 || ++nodes > 4096) {
+        throw new Error("Invalid logo geometry.");
+      }
+      const element = document.createElementNS("http://www.w3.org/2000/svg", node.tag);
+      for (const [name, rawValue] of Object.entries(node.attrs ?? {})) {
+        if (typeof rawValue !== "string" || /^on/iu.test(name) || ["style", "class"].includes(name)) continue;
+        let value = rawValue;
+        if (name === "id") value = prefix + value;
+        if (name === "href") {
+          if (!/^#logo-ref-\d+$/u.test(value)) continue;
+          value = "#" + prefix + value.slice(1);
+        } else if (/url\s*\(/iu.test(value)) {
+          if (!/^url\(#logo-ref-\d+\)$/u.test(value)) continue;
+          value = value.replace("url(#", `url(#${prefix}`);
+        }
+        element.setAttribute(name, value);
+      }
+      for (const child of node.children ?? []) element.append(createNode(child, depth + 1));
+      return element;
+    }
+    if (tree?.tag !== "svg") return null;
+    const svg = createNode(tree);
+    svg.setAttribute("width", "22");
+    svg.setAttribute("height", "22");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    return svg;
+  }
+
+  async function createPngLogo(dataUrl) {
+    if (typeof dataUrl !== "string" || dataUrl.length > 131_100 ||
+        !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/u.test(dataUrl)) return null;
+    const binary = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+    const bytes = Uint8Array.from(binary, (value) => value.charCodeAt(0));
+    if (bytes.length < 24) return null;
+    const header = new DataView(bytes.buffer);
+    if (header.getUint32(0) !== 0x89504e47 || header.getUint32(4) !== 0x0d0a1a0a ||
+        header.getUint32(12) !== 0x49484452) return null;
+    const width = header.getUint32(16);
+    const height = header.getUint32(20);
+    if (width < 1 || height < 1 || width > 512 || height > 512) return null;
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.setAttribute("aria-hidden", "true");
+      const context = canvas.getContext("2d");
+      if (!context) return null;
+      context.drawImage(bitmap, 0, 0);
+      return canvas;
+    } finally {
+      bitmap.close();
+    }
+  }
+
   function applyLogo(logo, account) {
-    const fallback = initials(account.service);
-    logo.textContent = fallback;
-    const src = account.iconDataUrl || account.iconUrl;
-    if (!src) return;
-    const image = document.createElement("img");
-    image.alt = "";
-    image.decoding = "async";
-    image.referrerPolicy = "no-referrer";
-    image.src = src;
-    logo.classList.add("has-icon");
-    if (account.iconColor) logo.style.backgroundColor = account.iconColor;
-    if (account.iconTitle) logo.title = account.iconTitle;
-    image.addEventListener("error", () => {
-      logo.classList.remove("has-icon");
-      logo.style.backgroundColor = "";
-      logo.title = "";
-      logo.replaceChildren(document.createTextNode(fallback));
-    }, { once: true });
-    logo.replaceChildren(image);
+    logo.textContent = initials(account.service);
+    const display = (graphic) => {
+      if (!graphic) return;
+      logo.classList.add("has-icon");
+      if (account.iconColor) logo.style.backgroundColor = account.iconColor;
+      if (account.iconTitle) logo.title = account.iconTitle;
+      logo.replaceChildren(graphic);
+    };
+    if (account.iconDataUrl) {
+      void createPngLogo(account.iconDataUrl).then((graphic) => {
+        if (logo.isConnected) display(graphic);
+      }).catch(() => {});
+    } else if (account.iconSvg) {
+      try { display(createSvgLogo(account.iconSvg)); } catch { /* Keep initials for invalid logos. */ }
+    }
   }
 
   function createCountdown(account) {

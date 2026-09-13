@@ -2,6 +2,7 @@
 
 import "./browser-compat.js";
 import "./vendor/argon2.umd.min.js";
+import { parseSvgLogo } from "./svg-logo.js";
 
 const STORAGE_KEY = "cofferAutofillSettings";
 const BRAND_CATALOG_STORAGE_KEY = "cofferServiceBrandCatalogV1";
@@ -45,6 +46,12 @@ const SVG_BRAND_ASSET = /^[a-z0-9][a-z0-9_.-]{0,128}\.svg$/u;
 const SELFHST_REFERENCE = /^[a-z0-9][a-z0-9-]{0,49}$/u;
 const SELFHST_STEM = /^[a-z0-9][a-z0-9-]{0,55}$/u;
 const MAX_ACCOUNT_ICON_BYTES = 96 * 1024;
+const MAX_ACCOUNT_URL_LENGTH = 2_048;
+const MAX_ACCOUNT_URLS = 32;
+const MAX_INLINE_LOGO_BYTES = 512 * 1024;
+const INLINE_LOGO_TIMEOUT_MS = 3_000;
+const INLINE_LOGO_CACHE_LIMIT = 64;
+const inlineLogoCache = new Map();
 const ACCOUNT_ICON_DATA_URL = /^data:image\/png;base64,[A-Za-z0-9+/]*={0,2}$/u;
 const UTF8 = new TextEncoder();
 const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true });
@@ -272,6 +279,25 @@ function accountPageTokens(account) {
   ]);
 }
 
+function accountUrlMatchesPage(value, page) {
+  if (!page) return false;
+  try {
+    const expected = new URL(value);
+    const actual = new URL(page.origin);
+    if (!["http:", "https:"].includes(expected.protocol) || expected.username || expected.password) return false;
+    if (actual.protocol !== expected.protocol || actual.port !== expected.port) return false;
+    const expectedHost = expected.hostname.toLowerCase().replace(/\.$/u, "");
+    const actualHost = actual.hostname.toLowerCase().replace(/\.$/u, "");
+    if (actualHost === expectedHost) return true;
+    // Local names and IP addresses must not authorize suffix lookalikes.
+    if (isLocalHost(expectedHost) || !expectedHost.includes(".") ||
+        expectedHost.includes(":") || /^\d+(?:\.\d+){3}$/u.test(expectedHost)) return false;
+    return isDomainOrSubdomain(actualHost, expectedHost);
+  } catch {
+    return false;
+  }
+}
+
 function pageContextFromUrl(value, settings) {
   try {
     if (!value) return null;
@@ -279,7 +305,6 @@ function pageContextFromUrl(value, settings) {
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     if (settings?.cofferOrigin && url.origin === settings.cofferOrigin) return null;
     const tokens = hostTokens(url.hostname);
-    if (tokens.length === 0) return null;
     return {
       host: url.host,
       hostname: url.hostname,
@@ -302,6 +327,9 @@ async function currentPageContext(settings) {
 
 function accountMatchesPage(account, page, catalog = null, cofferOrigin = "") {
   if (!page) return false;
+  if (account.urls?.length > 0) {
+    return account.urls.some((url) => accountUrlMatchesPage(url, page));
+  }
   const accountTokens = accountPageTokens(account);
   if (page.tokens.some((token) => accountTokens.has(token))) return true;
 
@@ -772,6 +800,43 @@ function readAccountIconDataUrl(value) {
   return value.length <= "data:image/png;base64,".length + maximumEncodedCharacters ? value : null;
 }
 
+function readAccountUrl(value) {
+  if (value === null || value === "") return null;
+  if (typeof value !== "string") throw new Error("Vault account website URL is invalid.");
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > MAX_ACCOUNT_URL_LENGTH || /[\u0000-\u001f\u007f]/u.test(trimmed)) {
+    throw new Error("Vault account website URL is invalid.");
+  }
+  let url;
+  try {
+    url = new URL(/^[a-z][a-z\d+.-]*:/iu.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    throw new Error("Vault account website URL is invalid.");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || !url.hostname ||
+      url.username || url.password || url.href.length > MAX_ACCOUNT_URL_LENGTH) {
+    throw new Error("Vault account website URL is invalid.");
+  }
+  return url.href;
+}
+
+function readAccountUrls(account) {
+  if (!Object.hasOwn(account, "urls")) {
+    const legacyUrl = account.url === undefined ? null : readAccountUrl(account.url);
+    return legacyUrl ? [legacyUrl] : [];
+  }
+  if (!Array.isArray(account.urls) || account.urls.length > MAX_ACCOUNT_URLS) {
+    throw new Error("Vault account website URLs are invalid.");
+  }
+  const urls = account.urls.map((value) => {
+    const url = readAccountUrl(value);
+    if (!url) throw new Error("Vault account website URL is invalid.");
+    return url;
+  });
+  return [...new Set(urls)];
+}
+
 function parseVaultAccount(value) {
   if (!isRecord(value)) throw new Error("Vault account is invalid.");
   const service = readText(value.service);
@@ -790,6 +855,7 @@ function parseVaultAccount(value) {
     id: typeof value.id === "string" ? value.id : `${service}:${identity}`,
     service,
     identity,
+    urls: readAccountUrls(value),
     group,
     secret,
     algorithm,
@@ -1229,6 +1295,80 @@ function accountIcon(account, catalog, cofferOrigin) {
     iconTitle: brand.title,
     iconUrl: brand.iconUrl,
   };
+}
+
+async function fetchInlineLogo(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), INLINE_LOGO_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    });
+    if (!response.ok || response.redirected || !response.body) return null;
+    const size = Number(response.headers.get("content-length"));
+    if (size > MAX_INLINE_LOGO_BYTES) return null;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_INLINE_LOGO_BYTES) {
+          await reader.cancel();
+          return null;
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const buffer = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      buffer.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return parseSvgLogo(UTF8_FATAL.decode(buffer));
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+function inlineLogo(iconUrl, cofferOrigin) {
+  if (!iconUrl) return Promise.resolve(null);
+  let url;
+  try {
+    url = new URL(iconUrl);
+    if (url.origin !== cofferOrigin || !["http:", "https:"].includes(url.protocol) ||
+        url.username || url.password || url.search || url.hash ||
+        !url.pathname.startsWith("/brands/") || !SVG_BRAND_ASSET.test(url.pathname.slice(8))) {
+      return Promise.resolve(null);
+    }
+  } catch {
+    return Promise.resolve(null);
+  }
+  const key = url.href;
+  const cached = inlineLogoCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  inlineLogoCache.delete(key);
+  while (inlineLogoCache.size >= INLINE_LOGO_CACHE_LIMIT) {
+    inlineLogoCache.delete(inlineLogoCache.keys().next().value);
+  }
+  const entry = { expiresAt: Infinity, promise: null };
+  entry.promise = fetchInlineLogo(key).then((logo) => {
+    entry.expiresAt = Date.now() + (logo ? SERVICE_BRANDS_REFRESH_MS : 30_000);
+    return logo;
+  });
+  inlineLogoCache.set(key, entry);
+  return entry.promise;
 }
 
 async function identifyVault(cofferOrigin, identifier) {
@@ -1965,7 +2105,10 @@ async function refreshVault() {
   }
 }
 
-function pageFillTotpCode(code) {
+function pageFillTotpCode(code, expectedOrigin) {
+  if (window.location.origin !== expectedOrigin || expectedOrigin === "null") {
+    return { filled: false, reason: "page_changed" };
+  }
   const normalizedCode = String(code ?? "").replace(/\D/g, "");
   if (!/^\d{6,8}$/u.test(normalizedCode)) {
     return { filled: false, reason: "invalid_code" };
@@ -2138,6 +2281,17 @@ async function fillCode(accountId) {
     };
   }
 
+  if (account.urls?.length > 0 &&
+      !accountMatchesPage(account, pageContextFromUrl(tab.url, settings))) {
+    return {
+      ok: false,
+      error: {
+        code: "url_mismatch",
+        message: "This page does not match this account's Website URLs. Add its address in Coffer, or copy the code manually.",
+      },
+    };
+  }
+
   const rawCode = await generateTotp(
     account.secret,
     Date.now(),
@@ -2156,10 +2310,19 @@ async function fillCode(accountId) {
     const results = await browser.scripting.executeScript({
       target: { tabId: tab.id },
       func: pageFillTotpCode,
-      args: [rawCode],
+      args: [rawCode, tabUrl.origin],
     });
     const filled = results.some((result) => result.result?.filled === true);
     if (!filled) {
+      if (results.some((result) => result.result?.reason === "page_changed")) {
+        return {
+          ok: false,
+          error: {
+            code: "page_changed",
+            message: "The page changed before the code could be filled. Open the intended page and try again.",
+          },
+        };
+      }
       return {
         ok: false,
         error: {
@@ -2195,16 +2358,43 @@ async function openCoffer() {
   return { ok: true };
 }
 
+function inlinePageContext(sender, settings) {
+  if (!Number.isInteger(sender?.tab?.id)) return null;
+  const isTopFrame = sender.frameId === 0;
+  // A subframe must be matched to its own URL, never to its embedding tab.
+  const page = pageContextFromUrl(
+    sender.url === undefined && isTopFrame ? sender.tab.url : sender.url,
+    settings,
+  );
+  if (!page || (sender.origin !== undefined && sender.origin !== page.origin)) return null;
+  return page;
+}
+
 async function inlineSuggestions(sender) {
   const settings = await readSettings();
-  if (!Number.isInteger(sender?.tab?.id) || !(await sessionIsAvailable(settings))) {
+  const page = inlinePageContext(sender, settings);
+  if (!page) return { ok: true, accounts: [], expiresAt: null };
+  if (!(await sessionIsAvailable(settings))) {
     return { ok: true, accounts: [], expiresAt: null };
   }
-  const page = pageContextFromUrl(sender.tab.url ?? sender.url, settings);
-  if (!page) return { ok: true, accounts: [], expiresAt: null };
+  const session = activeSession;
+  if (!session) return { ok: true, accounts: [], expiresAt: null };
+  const revision = session.revision;
   await serviceBrandCatalog(settings.cofferOrigin);
-  const vault = await publicVaultState(settings, page);
+  let vault = await publicVaultState(settings, page);
   if (!vault.ok) return { ok: true, accounts: [], expiresAt: null };
+  const logos = new Map(await Promise.all(
+    [...new Set(vault.pageMatches.map((account) => account.iconUrl).filter(Boolean))]
+      .slice(0, INLINE_LOGO_CACHE_LIMIT)
+      .map(async (url) => [url, await inlineLogo(url, settings.cofferOrigin)]),
+  ));
+  if (activeSession !== session || session.expiresAt <= Date.now() || session.revision !== revision) {
+    return { ok: true, accounts: [], expiresAt: null };
+  }
+  // Logo loading can cross a TOTP boundary; return freshly generated codes.
+  vault = await publicVaultState(settings, page);
+  if (!vault.ok || activeSession !== session || session.expiresAt <= Date.now() ||
+      session.revision !== revision) return { ok: true, accounts: [], expiresAt: null };
   return {
     ok: true,
     accounts: vault.pageMatches.map((account) => ({
@@ -2214,7 +2404,7 @@ async function inlineSuggestions(sender) {
       iconColor: account.iconColor,
       iconDataUrl: account.iconDataUrl,
       iconTitle: account.iconTitle,
-      iconUrl: account.iconUrl,
+      iconSvg: logos.get(account.iconUrl) ?? null,
       period: account.period,
       rawCode: account.rawCode,
       remaining: account.remaining,

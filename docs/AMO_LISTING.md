@@ -10,6 +10,8 @@ Coffer for Firefox is a small companion extension for Coffer, a self-hosted auth
 
 The Coffer tab does not need to be open. Your vault remains encrypted on the server and is decrypted locally in the extension after you enter your Coffer password.
 
+Set Website URLs on your Coffer cards to control matching sites. Multiple addresses are supported, and saved URLs restrict both inline suggestions and popup Fill. After editing a card, use Refresh vault in the extension header to load your changes.
+
 ## Categories
 
 - Privacy & Security
@@ -42,11 +44,15 @@ Data handling:
 - Matching account summaries are sent to the page only while Coffer is unlocked; a current code is written to the field only after the user chooses a suggestion. The **Fill** button remains available as a manual alternative.
 - Coffer allows browser-extension origins only for `identify` and `login`; vault mutations remain same-origin on the Coffer web app.
 
-Third-party library:
+Third-party libraries:
 - `vendor/argon2.umd.min.js` is `hash-wasm` version `4.12.0`, MIT licensed.
 - npm package: https://www.npmjs.com/package/hash-wasm/v/4.12.0
 - source repository: https://github.com/Daninet/hash-wasm
 - The bundled file is used only for local Argon2id password-based key derivation.
+- `vendor/sax.js` is `sax` version `1.6.1`, under the Blue Oak Model License 1.0.0 (bundled as `vendor/sax-LICENSE.txt`). Its upstream wrapper is adapted to an ES module; parser logic is unchanged.
+- npm package: https://www.npmjs.com/package/sax/v/1.6.1
+- source repository: https://github.com/isaacs/sax-js
+- The XML parser is used only to sanitize public Coffer brand SVGs into allowlisted geometry in the background. Inline logos use DOM-created SVG geometry or locally decoded PNG canvases, with no remote image URLs, raw markup insertion, or remotely hosted executable code.
 
 Build/review:
 - Runtime package: `npm run package:firefox`

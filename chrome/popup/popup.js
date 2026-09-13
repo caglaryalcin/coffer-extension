@@ -6,6 +6,7 @@ const connectionForm = document.querySelector("#connection-form");
 const unlockButton = connectionForm.querySelector(".unlock-button");
 const openCofferButton = document.querySelector("#open-coffer");
 const lockButton = document.querySelector("#lock-coffer");
+const refreshVaultButton = document.querySelector("#refresh-vault");
 const privacyButton = document.querySelector("#toggle-privacy");
 const statusBox = document.querySelector("#status");
 const copyStatus = document.querySelector("#copy-status");
@@ -41,6 +42,7 @@ let iconRefreshDelay = 350;
 let lastVaultTickSeconds = 0;
 let vaultExpiresAt = 0;
 let unlockPending = false;
+let vaultReloadPending = false;
 let totpRefreshPending = false;
 const iconRetryCounts = new Map();
 const rowAccountIds = new WeakMap();
@@ -760,6 +762,8 @@ function setAuthVisible(visible) {
 }
 
 function setVaultVisible(visible) {
+  refreshVaultButton.hidden = !visible;
+  refreshVaultButton.disabled = vaultReloadPending;
   lockButton.hidden = !visible;
   lockButton.disabled = false;
   privacyButton.hidden = !visible;
@@ -872,6 +876,39 @@ function refresh({ force = false } = {}) {
     }
   });
   return refreshPromise;
+}
+
+async function reloadVault() {
+  if (vaultReloadPending || vaultTools.hidden) return;
+  vaultReloadPending = true;
+  const epoch = ++uiEpoch;
+  refreshVaultButton.disabled = true;
+  refreshVaultButton.setAttribute("aria-busy", "true");
+  try {
+    const response = await browser.runtime.sendMessage({ type: "refresh-vault" });
+    if (epoch !== uiEpoch) {
+      if (!vaultTools.hidden) await refresh({ force: true });
+      return;
+    }
+    if (!response?.ok || !response.vault?.ok) {
+      await refresh({ force: true });
+      if (epoch === uiEpoch) {
+        setStatus(errorMessage(response, "Coffer could not refresh the vault."), "warning");
+      }
+      return;
+    }
+    // Discard older popup-state requests that could overwrite the fresh vault.
+    uiEpoch += 1;
+    applyVaultState(response.vault);
+  } catch (error) {
+    if (epoch === uiEpoch) {
+      setStatus(caughtErrorMessage(error, "Coffer could not refresh the vault."), "warning");
+    }
+  } finally {
+    vaultReloadPending = false;
+    refreshVaultButton.disabled = false;
+    refreshVaultButton.removeAttribute("aria-busy");
+  }
 }
 
 function setUnlockPending(pending) {
@@ -992,6 +1029,10 @@ openCofferButton.addEventListener("click", async () => {
 
 lockButton.addEventListener("click", () => {
   void lockCoffer();
+});
+
+refreshVaultButton.addEventListener("click", () => {
+  void reloadVault();
 });
 
 privacyButton.addEventListener("click", () => {

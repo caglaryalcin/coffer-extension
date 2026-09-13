@@ -19,7 +19,10 @@ const expectedFiles = [
   "popup/popup.css",
   "popup/popup.html",
   "popup/popup.js",
+  "svg-logo.js",
   "vendor/argon2.umd.min.js",
+  "vendor/sax-LICENSE.txt",
+  "vendor/sax.js",
 ];
 
 async function inventory(directory) {
