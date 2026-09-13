@@ -4,9 +4,9 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 
 ![](https://raw.githubusercontent.com/caglaryalcin/coffer-extension/refs/heads/main/screenshots/chrome.gif)
 
-![🌐 Chrome Extension](https://chromewebstore.google.com/detail/coffer/ajekhlpjkcohkdedhkdjkadilecboimd)
+🌐 [Chrome Extension](https://chromewebstore.google.com/detail/coffer/ajekhlpjkcohkdedhkdjkadilecboimd)
 
-🌐 Firefox Extension (***Waiting review***...)
+🌐 [Firefox Extension](https://addons.mozilla.org/tr/firefox/addon/coffer/)
 
 ## Connection model
 
