@@ -20,7 +20,14 @@ assert.doesNotMatch(popupHtml, />\s*All Codes\s*</u);
 assert.doesNotMatch(popupHtml, /id="codes-title"/u);
 assert.match(popupHtml, /id="all-codes" aria-label="All codes"/u);
 assert.match(popupHtml, /id="copy-status" role="status" aria-live="polite"/u);
-assert.match(popupHtml, />Keep unlocked for up to 12 hours, including browser restarts</u);
+assert.match(popupHtml, /id="coffer-remember-duration"/u);
+assert.match(popupHtml, /<option value="43200000">12h<\/option>/u);
+assert.match(popupHtml, /<option value="86400000">24h<\/option>/u);
+assert.match(popupHtml, /<option value="259200000">3d<\/option>/u);
+assert.match(popupHtml, /<option value="432000000">5d<\/option>/u);
+assert.match(popupHtml, /<option value="604800000">1w<\/option>/u);
+assert.match(popupHtml, /id="toggle-settings"[^>]*aria-controls="popup-settings"/u);
+assert.match(popupHtml, /id="group-visibility-list"/u);
 assert.match(popupHtml, /id="connection-form" class="connection-form" autocomplete="on"/u);
 assert.match(popupHtml, /id="coffer-email"[^>]*autocomplete="username"/u);
 assert.match(popupHtml, /id="coffer-password"[^>]*autocomplete="current-password"/u);
@@ -30,6 +37,14 @@ assert.match(popupHtml, /id="toggle-privacy"[^>]*aria-pressed="false"[^>]*title=
 
 assert.match(popupSource, /const value = String\(account\.rawCode \|\| ""\);/u);
 assert.match(popupSource, /let usernamesMasked = false;/u);
+assert.match(popupSource, /const POPUP_PREFERENCES_STORAGE_KEY = "cofferPopupPreferencesV1";/u);
+assert.match(popupSource, /popupPreferences\.hiddenGroups\.has\(categoryLabel\(account\)\)/u);
+assert.match(popupSource, /popupPreferences\.collapsedGroups\.has\(group\.label\)/u);
+assert.match(popupSource, /rememberDurationMs: rememberInput\.checked \? Number\(rememberDurationInput\.value\) : null/u);
+assert.match(popupSource, /vaultTools\.hidden = visible \|\| !vaultVisible;/u);
+assert.match(popupSource, /allCodesSection\.hidden = visible \|\| !vaultVisible;/u);
+assert.match(popupSource, /if \(!settingsPanel\.hidden\) pageCodesSection\.hidden = true;/u);
+assert.match(popupCss, /grid-template-columns: repeat\(auto-fit, minmax\(150px, 1fr\)\);/u);
 assert.match(popupSource, /usernamesMasked = stored\?\.\[PRIVACY_STORAGE_KEY\] === true;/u);
 assert.match(popupSource, /const code = document\.createElement\("button"\);/u);
 assert.match(popupSource, /code\.type = "button";/u);
@@ -157,6 +172,23 @@ assert.equal(managerFilled.passwordInput.value, "manager password");
 assert.equal(managerFilled.rememberEmailInput.checked, false);
 assert.equal(managerFilled.rememberPasswordInput.checked, false);
 
+const popupPreferencesStart = popupSource.indexOf("function validGroupNames");
+const popupPreferencesEnd = popupSource.indexOf("function writePopupPreferences", popupPreferencesStart);
+assert.notEqual(popupPreferencesStart, -1, "Could not find popup preference validation.");
+assert.notEqual(popupPreferencesEnd, -1, "Could not find the end of popup preference validation.");
+const validatePopupPreferences = new Function(`
+  ${popupSource.slice(popupPreferencesStart, popupPreferencesEnd)}
+  return validPopupPreferences;
+`)();
+const validPreferences = validatePopupPreferences({
+  collapsedGroups: ["Work", "Work", "Personal"],
+  hiddenGroups: ["Secret", "", 42, "x".repeat(257)],
+});
+assert.deepEqual([...validPreferences.collapsedGroups], ["Work", "Personal"]);
+assert.deepEqual([...validPreferences.hiddenGroups], ["Secret"]);
+assert.deepEqual([...validatePopupPreferences(null).collapsedGroups], []);
+assert.deepEqual([...validatePopupPreferences({ hiddenGroups: "Work" }).hiddenGroups], []);
+
 assert.match(inlineSource, /type: "inline-suggestions"/u);
 assert.match(inlineSource, /attachShadow\(\{ mode: "closed" \}\)/u);
 assert.match(inlineSource, /one-time-code/u);
@@ -168,6 +200,9 @@ assert.match(inlineSource, /event\.key === "ArrowDown"/u);
 assert.match(inlineSource, /event\.key === "Enter"/u);
 assert.match(inlineSource, /setNativeValue\(field, code\);/u);
 assert.match(backgroundSource, /if \(message\.type === "inline-suggestions"\) return inlineSuggestions\(sender\);/u);
+assert.match(backgroundSource, /const MAX_REMEMBERED_UNLOCK_MS = 7 \* 24 \* 60 \* 60 \* 1_000;/u);
+assert.match(backgroundSource, /REMEMBERED_UNLOCK_DURATIONS_MS\.has\(rememberDurationMs\)/u);
+assert.match(backgroundSource, /accountIsInVisiblePopupGroup\(account, hiddenGroups\)/u);
 assert.match(backgroundSource, /accounts: vault\.pageMatches\.map\(\(account\) => \(\{/u);
 assert.match(backgroundSource, /iconSvg: logos\.get\(account\.iconUrl\) \?\? null,/u);
 assert.match(backgroundSource, /period: account\.period,/u);

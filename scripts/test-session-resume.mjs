@@ -337,7 +337,7 @@ decoded.authKey.fill(0);
 decoded.vaultKey.fill(0);
 assert.throws(
   () => initialRuntime.decodeRememberedSession(
-    { ...storedRecord, expiresAt: storedRecord.unlockedAt + 12 * 60 * 60 * 1_000 + 1 },
+    { ...storedRecord, expiresAt: storedRecord.unlockedAt + 7 * 24 * 60 * 60 * 1_000 + 1 },
     { cofferOrigin: COFFER_ORIGIN },
   ),
   /invalid/u,
@@ -502,6 +502,32 @@ assert.equal(
   concurrentUnlockRuntime.getActiveSession()?.identifier,
   "second@example.com",
   "The latest concurrent unlock must be the only session that is published.",
+);
+
+const durationStorage = {};
+const durationAlarms = new Map();
+const durationRuntime = loadRuntime(
+  createBrowser(durationStorage, durationAlarms),
+  createFetch([]),
+  crypto,
+  createUnlockHooks(),
+);
+const weekUnlock = await durationRuntime.unlockCoffer({
+  identifier: IDENTIFIER,
+  password: "correct horse battery staple",
+  rememberLogin: true,
+  rememberDurationMs: 7 * 24 * 60 * 60 * 1_000,
+});
+assert.equal(weekUnlock.ok, true);
+assert.equal(
+  durationRuntime.getActiveSession().expiresAt - durationRuntime.getActiveSession().unlockedAt,
+  7 * 24 * 60 * 60 * 1_000,
+  "The selected remembered-session duration must control the local expiry.",
+);
+assert.equal(
+  durationStorage[SESSION_KEY].expiresAt - durationStorage[SESSION_KEY].unlockedAt,
+  7 * 24 * 60 * 60 * 1_000,
+  "The selected duration must survive a browser restart.",
 );
 
 const persistRaceStorage = {};

@@ -7,6 +7,7 @@ import { parseSvgLogo } from "./svg-logo.js";
 const STORAGE_KEY = "cofferAutofillSettings";
 const BRAND_CATALOG_STORAGE_KEY = "cofferServiceBrandCatalogV1";
 const SAVED_LOGIN_STORAGE_KEY = "cofferSavedLoginV1";
+const POPUP_PREFERENCES_STORAGE_KEY = "cofferPopupPreferencesV1";
 const SESSION_STORAGE_KEY = "cofferUnlockedSessionV1";
 const SESSION_STORAGE_FORMAT = "coffer-extension-unlocked-session";
 const SESSION_STORAGE_VERSION = 1;
@@ -22,7 +23,15 @@ const SERVICE_BRANDS_REFRESH_MS = 24 * 60 * 60 * 1_000;
 const SERVICE_BRANDS_RETRY_BASE_MS = 500;
 const SERVICE_BRANDS_RETRY_MAX_MS = 30_000;
 const DEFAULT_UNLOCK_MS = 20 * 60 * 1_000;
-const EXTENDED_UNLOCK_MS = 12 * 60 * 60 * 1_000;
+const DEFAULT_REMEMBERED_UNLOCK_MS = 12 * 60 * 60 * 1_000;
+const MAX_REMEMBERED_UNLOCK_MS = 7 * 24 * 60 * 60 * 1_000;
+const REMEMBERED_UNLOCK_DURATIONS_MS = new Set([
+  DEFAULT_REMEMBERED_UNLOCK_MS,
+  24 * 60 * 60 * 1_000,
+  3 * 24 * 60 * 60 * 1_000,
+  5 * 24 * 60 * 60 * 1_000,
+  MAX_REMEMBERED_UNLOCK_MS,
+]);
 const MAX_PASSWORD_BYTES = 1_024;
 const MIN_PASSWORD_CHARACTERS = 12;
 const MAX_VAULT_PAYLOAD_BYTES = 16 * 1024 * 1024;
@@ -1601,7 +1610,7 @@ function decodeRememberedSession(record, settings) {
     !Number.isSafeInteger(record.expiresAt) ||
     record.unlockedAt > now ||
     record.expiresAt <= record.unlockedAt ||
-    record.expiresAt - record.unlockedAt > EXTENDED_UNLOCK_MS ||
+    !REMEMBERED_UNLOCK_DURATIONS_MS.has(record.expiresAt - record.unlockedAt) ||
     typeof record.vaultId !== "string" ||
     !isRecord(record.keys)
   ) {
@@ -1763,7 +1772,11 @@ async function restoreRememberedSession(settings) {
           typeof record.identifier === "string" &&
           Number.isSafeInteger(record.expiresAt) &&
           record.expiresAt > Date.now()
-          ? { cofferOrigin: record.cofferOrigin, identifier: record.identifier }
+          ? {
+              cofferOrigin: record.cofferOrigin,
+              identifier: record.identifier,
+              rememberDurationMs: record.expiresAt - record.unlockedAt,
+            }
           : null;
         sessionRestoreWarning = `The saved Coffer session could not be restored while ${restoreStage}. Unlock Coffer again.`;
         const recordId = isRecord(record) && typeof record.sessionId === "string"
@@ -1813,6 +1826,9 @@ async function recoverRememberedSessionWithSavedPassword(settings) {
     identifier: saved.email,
     password: saved.password,
     rememberLogin: true,
+    rememberDurationMs: REMEMBERED_UNLOCK_DURATIONS_MS.has(context.rememberDurationMs)
+      ? context.rememberDurationMs
+      : DEFAULT_REMEMBERED_UNLOCK_MS,
   });
   if (recovery?.ok) return true;
   sessionRestoreWarning = `The saved Coffer session and saved-password recovery both failed. ${recovery?.error?.message ?? "Unlock Coffer again."}`;
@@ -1929,11 +1945,15 @@ async function popupState() {
 }
 
 async function unlockCoffer(credentials) {
+  const rememberDurationMs = credentials?.rememberLogin
+    ? credentials.rememberDurationMs ?? DEFAULT_REMEMBERED_UNLOCK_MS
+    : null;
   if (
     !isRecord(credentials) ||
     typeof credentials.identifier !== "string" ||
     typeof credentials.password !== "string" ||
     typeof credentials.rememberLogin !== "boolean" ||
+    (credentials.rememberLogin && !REMEMBERED_UNLOCK_DURATIONS_MS.has(rememberDurationMs)) ||
     credentials.identifier.length > 254 ||
     credentials.password.length > 1024 ||
     !credentials.identifier.trim() ||
@@ -2025,7 +2045,7 @@ async function unlockCoffer(credentials) {
     const now = Date.now();
     session = {
       cofferOrigin: settings.cofferOrigin,
-      expiresAt: now + (credentials.rememberLogin ? EXTENDED_UNLOCK_MS : DEFAULT_UNLOCK_MS),
+      expiresAt: now + (credentials.rememberLogin ? rememberDurationMs : DEFAULT_UNLOCK_MS),
       identifier,
       remembered: credentials.rememberLogin,
       revision: login.revision,
@@ -2370,6 +2390,22 @@ function inlinePageContext(sender, settings) {
   return page;
 }
 
+async function hiddenPopupGroups() {
+  try {
+    const stored = await browser.storage.local.get(POPUP_PREFERENCES_STORAGE_KEY);
+    const hiddenGroups = stored?.[POPUP_PREFERENCES_STORAGE_KEY]?.hiddenGroups;
+    if (!Array.isArray(hiddenGroups)) return new Set();
+    return new Set(hiddenGroups.filter((group) => typeof group === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function accountIsInVisiblePopupGroup(account, hiddenGroups) {
+  const group = String(account?.group || "").trim() || "Uncategorized";
+  return !hiddenGroups.has(group);
+}
+
 async function inlineSuggestions(sender) {
   const settings = await readSettings();
   const page = inlinePageContext(sender, settings);
@@ -2383,6 +2419,10 @@ async function inlineSuggestions(sender) {
   await serviceBrandCatalog(settings.cofferOrigin);
   let vault = await publicVaultState(settings, page);
   if (!vault.ok) return { ok: true, accounts: [], expiresAt: null };
+  const hiddenGroups = await hiddenPopupGroups();
+  vault.pageMatches = vault.pageMatches.filter((account) => (
+    accountIsInVisiblePopupGroup(account, hiddenGroups)
+  ));
   const logos = new Map(await Promise.all(
     [...new Set(vault.pageMatches.map((account) => account.iconUrl).filter(Boolean))]
       .slice(0, INLINE_LOGO_CACHE_LIMIT)
@@ -2395,6 +2435,9 @@ async function inlineSuggestions(sender) {
   vault = await publicVaultState(settings, page);
   if (!vault.ok || activeSession !== session || session.expiresAt <= Date.now() ||
       session.revision !== revision) return { ok: true, accounts: [], expiresAt: null };
+  vault.pageMatches = vault.pageMatches.filter((account) => (
+    accountIsInVisiblePopupGroup(account, hiddenGroups)
+  ));
   return {
     ok: true,
     accounts: vault.pageMatches.map((account) => ({

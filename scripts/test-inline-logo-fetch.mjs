@@ -57,7 +57,17 @@ function createRuntime(source, parseSvgLogo, options = {}) {
       },
     };
   `)(
-    {},
+    {
+      storage: {
+        local: {
+          async get() {
+            return options.hiddenGroups
+              ? { cofferPopupPreferencesV1: { hiddenGroups: options.hiddenGroups } }
+              : {};
+          },
+        },
+      },
+    },
     parseSvgLogo,
     async (url, request) => {
       fetches.push({ url, request });
@@ -203,6 +213,14 @@ for (const browserName of ["chrome", "firefox"]) {
     assert.equal(result.accounts[2].iconSvg, null);
     await runtime.inlineSuggestions(sender);
     assert.equal(runtime.fetches.length, 1);
+  }
+
+  {
+    const runtime = createRuntime(source, parseSvgLogo, { hiddenGroups: ["Work"] });
+    runtime.setAccounts([account(), { ...account(null), group: "Personal" }]);
+    const result = await runtime.inlineSuggestions(sender);
+    assert.deepEqual(result.accounts.map((item) => item.group), ["Personal"]);
+    assert.equal(runtime.fetches.length, 0, `${browserName}: hidden groups must not trigger logo requests.`);
   }
 
   for (const reason of ["lock", "replace", "expire", "revision"]) {

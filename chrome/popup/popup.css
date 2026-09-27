@@ -30,7 +30,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -117,6 +118,7 @@ button {
 
 .connection-card,
 .status-card,
+.settings-card,
 .vault-tools,
 .codes {
   border: 1px solid var(--line);
@@ -193,7 +195,8 @@ label span {
   font-size: 12px;
 }
 
-input {
+input,
+select {
   width: 100%;
   height: 36px;
   padding: 0 11px;
@@ -217,7 +220,8 @@ input {
   font-size: 14px;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -266,6 +270,24 @@ input:focus {
   display: block;
 }
 
+.remember-session-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.remember-session-copy span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.remember-session-copy select {
+  width: auto;
+  height: 30px;
+  padding: 0 26px 0 9px;
+  color: var(--text);
+}
+
 .saved-login-options {
   display: grid;
   gap: 8px;
@@ -299,6 +321,79 @@ input:focus {
   color: #e8b0b0;
 }
 
+.settings-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.settings-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-head p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-close {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-hover);
+  cursor: pointer;
+}
+
+.group-visibility-settings {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.group-visibility-settings legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.group-visibility-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.group-visibility-row {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.group-visibility-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.group-visibility-row span {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .codes {
   overflow: hidden;
 }
@@ -324,17 +419,42 @@ input:focus {
 }
 
 .code-category {
+  width: 100%;
   min-height: 30px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   padding: 7px 12px;
+  border: 0;
   background: #191b1d;
   color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.code-category:hover,
+.code-category:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+
+.code-category i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform .15s ease;
+}
+
+.code-category[aria-expanded="false"] i {
+  transform: rotate(-45deg);
 }
 
 .code-category span {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: #d5cfcb;

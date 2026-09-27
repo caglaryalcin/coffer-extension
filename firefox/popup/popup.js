@@ -8,6 +8,10 @@ const openCofferButton = document.querySelector("#open-coffer");
 const lockButton = document.querySelector("#lock-coffer");
 const refreshVaultButton = document.querySelector("#refresh-vault");
 const privacyButton = document.querySelector("#toggle-privacy");
+const settingsButton = document.querySelector("#toggle-settings");
+const settingsPanel = document.querySelector("#popup-settings");
+const closeSettingsButton = document.querySelector("#close-settings");
+const groupVisibilityList = document.querySelector("#group-visibility-list");
 const statusBox = document.querySelector("#status");
 const copyStatus = document.querySelector("#copy-status");
 const authCard = document.querySelector("#auth-card");
@@ -16,6 +20,7 @@ const passwordInput = document.querySelector("#coffer-password");
 const rememberEmailInput = document.querySelector("#coffer-remember-email");
 const rememberPasswordInput = document.querySelector("#coffer-remember-password");
 const rememberInput = document.querySelector("#coffer-remember");
+const rememberDurationInput = document.querySelector("#coffer-remember-duration");
 const vaultTools = document.querySelector("#vault-tools");
 const searchInput = document.querySelector("#code-search");
 const pageCodesSection = document.querySelector("#page-codes");
@@ -25,6 +30,7 @@ const codesList = document.querySelector("#codes-list");
 
 const PRIVACY_STORAGE_KEY = "cofferPopupPrivacyMasked";
 const SAVED_LOGIN_STORAGE_KEY = "cofferSavedLoginV1";
+const POPUP_PREFERENCES_STORAGE_KEY = "cofferPopupPreferencesV1";
 const SESSION_KEEPALIVE_MS = 20_000;
 const USERNAME_OVERFLOW_TOLERANCE_PX = 1;
 const USERNAME_SCROLL_SPEED_PX_PER_SECOND = 40;
@@ -54,6 +60,8 @@ let activeCopyEpoch = 0;
 let invalidatedCopyEpoch = 0;
 let savedLogin = { email: "", password: "" };
 let savedLoginStorageTask = Promise.resolve();
+let popupPreferences = { collapsedGroups: new Set(), hiddenGroups: new Set() };
+let popupPreferencesStorageTask = Promise.resolve();
 const usernameMeasureFrames = new WeakMap();
 
 function setStatus(message, tone = "") {
@@ -399,11 +407,14 @@ function createCodeRow() {
 }
 
 function createCategoryHeader() {
-  const header = document.createElement("div");
+  const header = document.createElement("button");
+  header.type = "button";
   header.className = "code-category";
   const title = document.createElement("span");
   const count = document.createElement("small");
-  header.append(title, count);
+  const chevron = document.createElement("i");
+  chevron.setAttribute("aria-hidden", "true");
+  header.append(chevron, title, count);
   return header;
 }
 
@@ -573,11 +584,112 @@ async function loadPrivacyPreference() {
   updatePrivacyButton();
 }
 
+function validGroupNames(value) {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.filter((group) => (
+    typeof group === "string" && group.length > 0 && group.length <= 256
+  )));
+}
+
+function validPopupPreferences(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { collapsedGroups: new Set(), hiddenGroups: new Set() };
+  }
+  return {
+    collapsedGroups: validGroupNames(value.collapsedGroups),
+    hiddenGroups: validGroupNames(value.hiddenGroups),
+  };
+}
+
+function writePopupPreferences() {
+  const record = {
+    collapsedGroups: [...popupPreferences.collapsedGroups],
+    hiddenGroups: [...popupPreferences.hiddenGroups],
+  };
+  const operation = popupPreferencesStorageTask.catch(() => {}).then(() => (
+    browser.storage.local.set({ [POPUP_PREFERENCES_STORAGE_KEY]: record })
+  ));
+  popupPreferencesStorageTask = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+async function loadPopupPreferences() {
+  try {
+    const stored = await browser.storage.local.get(POPUP_PREFERENCES_STORAGE_KEY);
+    popupPreferences = validPopupPreferences(stored?.[POPUP_PREFERENCES_STORAGE_KEY]);
+  } catch {
+    popupPreferences = { collapsedGroups: new Set(), hiddenGroups: new Set() };
+  }
+}
+
+function availableGroupLabels() {
+  return [...new Set(latestCodes.map(categoryLabel))].sort((left, right) => (
+    left.localeCompare(right, undefined, { sensitivity: "base" })
+  ));
+}
+
+function renderGroupVisibilitySettings() {
+  const groups = availableGroupLabels();
+  if (groups.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "settings-empty";
+    empty.textContent = "No groups are available.";
+    groupVisibilityList.replaceChildren(empty);
+    return;
+  }
+
+  const rows = groups.map((group) => {
+    const row = document.createElement("label");
+    row.className = "group-visibility-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = !popupPreferences.hiddenGroups.has(group);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) popupPreferences.hiddenGroups.delete(group);
+      else popupPreferences.hiddenGroups.add(group);
+      void writePopupPreferences().catch(() => {
+        setStatus("Group visibility could not be saved.", "warning");
+      });
+    });
+    const name = document.createElement("span");
+    name.textContent = group;
+    row.append(checkbox, name);
+    return row;
+  });
+  groupVisibilityList.replaceChildren(...rows);
+}
+
+function setSettingsVisible(visible) {
+  const vaultVisible = !settingsButton.hidden;
+  settingsPanel.hidden = !visible;
+  settingsButton.setAttribute("aria-expanded", String(visible));
+  settingsButton.setAttribute("aria-label", visible ? "Close settings" : "Open settings");
+  vaultTools.hidden = visible || !vaultVisible;
+  allCodesSection.hidden = visible || !vaultVisible;
+  if (visible || !vaultVisible) {
+    pageCodesSection.hidden = true;
+  } else {
+    renderCodes();
+  }
+  if (visible) renderGroupVisibilitySettings();
+}
+
 function updateCategoryHeader(header, label, count) {
   const title = header.querySelector("span");
   const counter = header.querySelector("small");
+  const collapsed = popupPreferences.collapsedGroups.has(label);
   if (title) setText(title, label);
   if (counter) setText(counter, `${count}`);
+  header.setAttribute("aria-expanded", String(!collapsed));
+  header.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${label} group, ${count} codes`);
+  header.onclick = () => {
+    if (popupPreferences.collapsedGroups.has(label)) popupPreferences.collapsedGroups.delete(label);
+    else popupPreferences.collapsedGroups.add(label);
+    renderCodes();
+    void writePopupPreferences().catch(() => {
+      setStatus("Collapsed groups could not be saved.", "warning");
+    });
+  };
 }
 
 function updateRemaining(row, seconds) {
@@ -707,7 +819,9 @@ function renderCodeRows(container, accounts, emptyMessage, { grouped = false } =
       header.dataset.category = group.label;
       updateCategoryHeader(header, group.label, group.accounts.length);
       placeElement(header);
-      for (const account of group.accounts) renderAccount(account);
+      if (!popupPreferences.collapsedGroups.has(group.label)) {
+        for (const account of group.accounts) renderAccount(account);
+      }
     }
   } else {
     for (const account of accounts) renderAccount(account);
@@ -733,7 +847,10 @@ function renderCodes(accounts = latestCodes, pageMatches = latestPageCodes) {
   latestPageCodes = Array.isArray(pageMatches) ? pageMatches : [];
 
   const query = searchInput.value.trim().toLocaleLowerCase("en");
-  const visiblePageCodes = latestPageCodes.filter((account) => codeMatchesSearch(account, query));
+  const groupIsVisible = (account) => !popupPreferences.hiddenGroups.has(categoryLabel(account));
+  const visiblePageCodes = latestPageCodes.filter((account) => (
+    groupIsVisible(account) && codeMatchesSearch(account, query)
+  ));
   pageCodesSection.hidden = visiblePageCodes.length === 0;
   if (visiblePageCodes.length > 0) {
     renderCodeRows(pageCodesList, visiblePageCodes, "No codes match this page.");
@@ -743,17 +860,23 @@ function renderCodes(accounts = latestCodes, pageMatches = latestPageCodes) {
 
   const pageIds = new Set(latestPageCodes.map((account) => account.id));
   const otherCodes = latestCodes.filter((account) => !pageIds.has(account.id));
-  const visibleCodes = otherCodes.filter((account) => codeMatchesSearch(account, query));
+  const visibleCodes = otherCodes.filter((account) => (
+    groupIsVisible(account) && codeMatchesSearch(account, query)
+  ));
+  const visibleVaultCodes = latestCodes.filter(groupIsVisible);
   renderCodeRows(
     codesList,
     visibleCodes,
     latestCodes.length === 0
       ? "No active Coffer codes in this vault."
+      : visibleVaultCodes.length === 0
+        ? "All groups are hidden in Settings."
       : otherCodes.length === 0 && !query
         ? "No other active Coffer codes."
         : "No codes match this search.",
     { grouped: true },
   );
+  if (!settingsPanel.hidden) pageCodesSection.hidden = true;
 }
 
 function setAuthVisible(visible) {
@@ -768,10 +891,15 @@ function setVaultVisible(visible) {
   lockButton.disabled = false;
   privacyButton.hidden = !visible;
   privacyButton.disabled = false;
-  vaultTools.hidden = !visible;
-  allCodesSection.hidden = !visible;
+  settingsButton.hidden = !visible;
+  settingsButton.disabled = false;
+  const settingsVisible = visible && !settingsPanel.hidden;
+  vaultTools.hidden = !visible || settingsVisible;
+  allCodesSection.hidden = !visible || settingsVisible;
+  if (settingsVisible) pageCodesSection.hidden = true;
   if (!visible) {
     invalidateCopyOperations();
+    setSettingsVisible(false);
     if (iconRefreshTimer !== null) window.clearTimeout(iconRefreshTimer);
     iconRefreshTimer = null;
     iconRefreshDelay = 350;
@@ -814,6 +942,7 @@ function applyVaultState(vault, warning = "") {
     clearStatus();
   }
   renderCodes(latestCodes, latestPageCodes);
+  if (!settingsPanel.hidden) renderGroupVisibilitySettings();
   scheduleIconRefresh(vault?.iconsPending === true, vault?.iconsRetryAt);
 }
 
@@ -949,6 +1078,7 @@ connectionForm.addEventListener("submit", async (event) => {
         identifier: emailInput.value,
         password,
         rememberLogin: rememberInput.checked,
+        rememberDurationMs: rememberInput.checked ? Number(rememberDurationInput.value) : null,
       },
     });
     if (!response?.ok) {
@@ -1043,9 +1173,17 @@ privacyButton.addEventListener("click", () => {
   void browser.storage.local.set({ [PRIVACY_STORAGE_KEY]: usernamesMasked }).catch(() => {});
 });
 
+settingsButton.addEventListener("click", () => {
+  setSettingsVisible(settingsPanel.hidden);
+});
+
+closeSettingsButton.addEventListener("click", () => {
+  setSettingsVisible(false);
+  settingsButton.focus();
+});
+
 async function initialize() {
-  await loadSavedLogin();
-  await loadPrivacyPreference();
+  await Promise.all([loadSavedLogin(), loadPrivacyPreference(), loadPopupPreferences()]);
   await refresh();
 }
 
