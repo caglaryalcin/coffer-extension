@@ -525,11 +525,25 @@ function validSavedLogin(value) {
   };
 }
 
+function syncRememberSessionControls() {
+  const hasRememberSessionPrerequisites = passwordInput.value.length > 0
+    && rememberPasswordInput.checked;
+  if (!hasRememberSessionPrerequisites) rememberInput.checked = false;
+  rememberInput.disabled = unlockPending || !hasRememberSessionPrerequisites;
+  rememberDurationInput.disabled = unlockPending || !hasRememberSessionPrerequisites;
+}
+
+function clearPasswordInput() {
+  passwordInput.value = "";
+  syncRememberSessionControls();
+}
+
 function restoreSavedLoginFields({ clearMissing = false } = {}) {
   rememberEmailInput.checked = Boolean(savedLogin.email);
   rememberPasswordInput.checked = Boolean(savedLogin.password);
   if (savedLogin.email || clearMissing) emailInput.value = savedLogin.email;
   if (savedLogin.password || clearMissing) passwordInput.value = savedLogin.password;
+  syncRememberSessionControls();
 }
 
 function writeSavedLogin() {
@@ -1043,6 +1057,13 @@ async function reloadVault() {
 function setUnlockPending(pending) {
   unlockPending = pending;
   unlockButton.disabled = pending;
+  originInput.disabled = pending;
+  openCofferButton.disabled = pending;
+  emailInput.disabled = pending;
+  passwordInput.disabled = pending;
+  rememberEmailInput.disabled = pending;
+  rememberPasswordInput.disabled = pending;
+  syncRememberSessionControls();
 }
 
 connectionForm.addEventListener("submit", async (event) => {
@@ -1054,13 +1075,13 @@ connectionForm.addEventListener("submit", async (event) => {
     const normalizedOrigin = normalizeCofferOrigin(originInput.value);
     if (!normalizedOrigin) {
       setStatus("Enter a valid Coffer URL.", "warning");
-      passwordInput.value = "";
+      clearPasswordInput();
       return;
     }
     originInput.value = normalizedOrigin;
     const hasPermission = await requestCofferPermission(normalizedOrigin);
     if (!hasPermission) {
-      passwordInput.value = "";
+      clearPasswordInput();
       setAuthVisible(true);
       setVaultVisible(false);
       renderCodes([]);
@@ -1068,7 +1089,7 @@ connectionForm.addEventListener("submit", async (event) => {
     }
     const savedOrigin = await saveCurrentOrigin("Preparing Coffer...");
     if (!savedOrigin) {
-      passwordInput.value = "";
+      clearPasswordInput();
       return;
     }
     setStatus("Unlocking Coffer...");
@@ -1082,7 +1103,7 @@ connectionForm.addEventListener("submit", async (event) => {
       },
     });
     if (!response?.ok) {
-      passwordInput.value = "";
+      clearPasswordInput();
       setStatus(errorMessage(response, "Coffer could not be unlocked."), "warning");
       setAuthVisible(true);
       return;
@@ -1093,10 +1114,10 @@ connectionForm.addEventListener("submit", async (event) => {
     } catch {
       savedLoginWarning = "The selected sign-in fields could not be saved on this device.";
     }
-    passwordInput.value = "";
+    clearPasswordInput();
     applyVaultState(response.vault, [response.warning, savedLoginWarning].filter(Boolean).join(" "));
   } catch (error) {
-    passwordInput.value = "";
+    clearPasswordInput();
     setStatus(caughtErrorMessage(error, "Coffer could not be unlocked."), "warning");
     setAuthVisible(true);
   } finally {
@@ -1111,7 +1132,7 @@ async function lockCoffer() {
   latestCodes = [];
   latestPageCodes = [];
   searchInput.value = "";
-  passwordInput.value = "";
+  clearPasswordInput();
   rememberInput.checked = false;
   restoreSavedLoginFields({ clearMissing: true });
   clearStatus();
@@ -1130,6 +1151,9 @@ async function lockCoffer() {
 
 searchInput.addEventListener("input", () => renderCodes());
 
+passwordInput.addEventListener("input", syncRememberSessionControls);
+passwordInput.addEventListener("change", syncRememberSessionControls);
+
 rememberEmailInput.addEventListener("change", () => {
   if (!rememberEmailInput.checked) {
     void forgetSavedLoginField("email").catch(() => {
@@ -1139,6 +1163,7 @@ rememberEmailInput.addEventListener("change", () => {
 });
 
 rememberPasswordInput.addEventListener("change", () => {
+  syncRememberSessionControls();
   if (!rememberPasswordInput.checked) {
     void forgetSavedLoginField("password").catch(() => {
       setStatus("The saved password could not be removed from this device.", "warning");

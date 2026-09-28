@@ -19,7 +19,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 - Public service icon metadata is loaded from `/api/service-brands`; custom account icons come from the decrypted vault payload.
 - Inline brand logos are fetched by the extension from the configured Coffer server and rendered as sanitized SVG geometry. Custom PNG logos are drawn locally on a canvas, so the menu does not rely on the target page allowing external images.
 - Codes can be copied by clicking the displayed code itself or filled directly into the active page with **Fill**.
-- **Keep unlocked** can retain an unlocked session for 12 hours, 24 hours, 3 days, 5 days, or 1 week, including across browser and Manifest V3 background-worker restarts.
+- **Keep unlocked** becomes available after a password is entered and **Remember password on this device** is selected. It can retain an unlocked session for 12 hours, 24 hours, 3 days, 5 days, or 1 week, including across browser and Manifest V3 background-worker restarts.
 - The popup starts with usernames visible and can hide or reveal them with its eye button; TOTP codes remain visible.
 - The popup settings can hide selected groups, and group headings can be expanded or collapsed. These preferences also survive browser restarts; hidden groups are omitted from inline suggestions.
 
@@ -27,7 +27,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 
 - The server returns the vault header and encrypted payload only.
 - TOTP secrets are decrypted inside the extension with the Coffer password.
-- The password is used for one unlock attempt unless the user explicitly selects **Remember password on this device**. Email and password persistence are independent and can be disabled separately. When both **Remember password** and **Keep unlocked** are selected, the saved password can automatically recover an unexpired session if its resume key is rejected after a browser restart.
+- The password is used for one unlock attempt unless the user explicitly selects **Remember password on this device**. Email and password persistence are independent and can be disabled separately. When **Remember email**, **Remember password**, and **Keep unlocked** are all selected, the saved password can automatically recover an unexpired session if its resume key is rejected after a browser restart.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
 - When **Keep unlocked** is selected, only the minimum resume key material and session metadata are kept for the selected duration (up to 1 week) in extension-only `storage.local`; the decrypted vault is fetched and decrypted again after a background or browser restart.
 - The remembered session can be set to 12 hours, 24 hours, 3 days, 5 days, or 1 week and is cleared by **Lock**, expiry, or a Coffer URL change. Because its resume key material is written to the browser profile, use this option only on a trusted device.

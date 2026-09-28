@@ -22,7 +22,7 @@ Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
 
 ## Permission Rationale
 
-- `storage`: persistently stores the configured Coffer URL, popup preferences, cached public icon metadata, and only the email/password fields the user explicitly chooses to remember. When the user selects **Keep unlocked**, extension-only local storage also holds the minimum resume key material and bounded session metadata for up to 12 hours so the session can survive a browser restart.
+- `storage`: persistently stores the configured Coffer URL, popup preferences, cached public icon metadata, and only the email/password fields the user explicitly chooses to remember. When the user selects **Keep unlocked**, extension-only local storage also holds the minimum resume key material and bounded session metadata for the selected duration, up to 1 week, so the session can survive a browser restart.
 - `alarms`: expires and removes a remembered unlocked session at its fixed deadline even when the background page is idle.
 - `activeTab`: reads the active tab URL while the popup is open, so matching Coffer codes can be shown first.
 - `scripting`: injects a short one-time script only after the user clicks **Fill**.
@@ -31,9 +31,9 @@ Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
 ## Data Handling
 
 - The extension does not collect analytics or telemetry.
-- The Coffer password is not stored by default. It is persisted in extension-only local storage only when the user explicitly selects **Remember password on this device**, independently of the email option, and is removed when that option is turned off. If **Keep unlocked** is also selected, that saved password may automatically recover an unexpired session when normal resume fails after a browser restart.
+- The Coffer password is not stored by default. It is persisted in extension-only local storage only when the user explicitly selects **Remember password on this device**, independently of the email option, and is removed when that option is turned off. If **Remember email**, **Remember password**, and **Keep unlocked** are all selected, that saved password may automatically recover an unexpired session when normal resume fails after a browser restart.
 - Decrypted vault data and WebCrypto key handles stay in extension background memory only.
-- **Keep unlocked** stores only resume key material and bounded session metadata in extension-only `storage.local` for up to 12 hours. It does not store the decrypted vault, password, TOTP secrets, or generated codes there, and should be enabled only on a trusted device.
+- **Keep unlocked** becomes available only after the user enters a password and selects **Remember password on this device**. If enabled, it stores only resume key material and bounded session metadata in extension-only `storage.local` for the selected duration, up to 1 week. It does not store the decrypted vault, TOTP secrets, or generated codes there; the separately remembered password and this option should be used only on a trusted device.
 - TOTP codes are generated locally and are never written to extension storage. A code is written to the clipboard or a page field only after the user explicitly selects that action.
 - The Coffer API returns encrypted vault payloads; the extension decrypts them locally after password verification.
 - Coffer accepts browser-extension origins only for read/unlock actions; vault mutations remain same-origin on the Coffer web app.

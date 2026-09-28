@@ -56,30 +56,31 @@
           </label>
 
           <div class="auth-fields" id="auth-card" hidden>
-            <label>
-              <span>Email</span>
-              <input id="coffer-email" name="identifier" type="email" autocomplete="username" placeholder="you@example.com">
-            </label>
-            <label>
-              <span>Password</span>
-              <input id="coffer-password" name="password" type="password" autocomplete="current-password">
-            </label>
-            <fieldset class="saved-login-options">
-              <legend>Saved sign-in</legend>
+            <div class="auth-field">
+              <label>
+                <span>Email</span>
+                <input id="coffer-email" name="identifier" type="email" autocomplete="username" placeholder="you@example.com">
+              </label>
               <label class="remember-row">
                 <input id="coffer-remember-email" name="rememberEmail" type="checkbox">
                 <span>Remember email</span>
+              </label>
+            </div>
+            <div class="auth-field">
+              <label>
+                <span>Password</span>
+                <input id="coffer-password" name="password" type="password" autocomplete="current-password">
               </label>
               <label class="remember-row">
                 <input id="coffer-remember-password" name="rememberPassword" type="checkbox">
                 <span>Remember password on this device</span>
               </label>
-            </fieldset>
+            </div>
             <label class="remember-row remember-session-row">
-              <input id="coffer-remember" name="rememberLogin" type="checkbox">
+              <input id="coffer-remember" name="rememberLogin" type="checkbox" disabled>
               <span class="remember-session-copy">
                 <span>Keep unlocked for</span>
-                <select id="coffer-remember-duration" name="rememberDuration" aria-label="Keep unlocked duration">
+                <select id="coffer-remember-duration" name="rememberDuration" aria-label="Keep unlocked duration" disabled>
                   <option value="43200000">12h</option>
                   <option value="86400000">24h</option>
                   <option value="259200000">3d</option>

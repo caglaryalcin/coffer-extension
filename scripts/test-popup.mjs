@@ -33,6 +33,12 @@ assert.match(popupHtml, /id="coffer-email"[^>]*autocomplete="username"/u);
 assert.match(popupHtml, /id="coffer-password"[^>]*autocomplete="current-password"/u);
 assert.match(popupHtml, /id="coffer-remember-email"[^>]*type="checkbox"/u);
 assert.match(popupHtml, /id="coffer-remember-password"[^>]*type="checkbox"/u);
+assert.match(popupHtml, /class="auth-field"[\s\S]*?id="coffer-email"[\s\S]*?id="coffer-remember-email"[\s\S]*?<\/div>/u);
+assert.match(popupHtml, /class="auth-field"[\s\S]*?id="coffer-password"[\s\S]*?id="coffer-remember-password"[\s\S]*?<\/div>/u);
+assert.doesNotMatch(popupHtml, /saved-login-options/u);
+assert.match(popupCss, /\.auth-field \{\s*display: grid;\s*gap: 7px;/u);
+assert.match(popupHtml, /id="coffer-remember"[^>]*type="checkbox"[^>]*disabled/u);
+assert.match(popupHtml, /id="coffer-remember-duration"[^>]*disabled/u);
 assert.match(popupHtml, /id="toggle-privacy"[^>]*aria-pressed="false"[^>]*title="Hide usernames"/u);
 
 assert.match(popupSource, /const value = String\(account\.rawCode \|\| ""\);/u);
@@ -41,6 +47,9 @@ assert.match(popupSource, /const POPUP_PREFERENCES_STORAGE_KEY = "cofferPopupPre
 assert.match(popupSource, /popupPreferences\.hiddenGroups\.has\(categoryLabel\(account\)\)/u);
 assert.match(popupSource, /popupPreferences\.collapsedGroups\.has\(group\.label\)/u);
 assert.match(popupSource, /rememberDurationMs: rememberInput\.checked \? Number\(rememberDurationInput\.value\) : null/u);
+assert.match(popupSource, /passwordInput\.addEventListener\("input", syncRememberSessionControls\);/u);
+assert.match(popupSource, /passwordInput\.addEventListener\("change", syncRememberSessionControls\);/u);
+assert.match(popupSource, /rememberPasswordInput\.addEventListener\("change", \(\) => \{\s*syncRememberSessionControls\(\);/u);
 assert.match(popupSource, /vaultTools\.hidden = visible \|\| !vaultVisible;/u);
 assert.match(popupSource, /allCodesSection\.hidden = visible \|\| !vaultVisible;/u);
 assert.match(popupSource, /if \(!settingsPanel\.hidden\) pageCodesSection\.hidden = true;/u);
@@ -116,6 +125,8 @@ function savedLoginHarness(initialState, initialInputs = {}) {
   const passwordInput = { value: initialInputs.password ?? "" };
   const rememberEmailInput = { checked: false };
   const rememberPasswordInput = { checked: false };
+  const rememberInput = { checked: false, disabled: true };
+  const rememberDurationInput = { disabled: true };
   const browser = {
     storage: {
       local: {
@@ -137,16 +148,82 @@ function savedLoginHarness(initialState, initialInputs = {}) {
     "passwordInput",
     "rememberEmailInput",
     "rememberPasswordInput",
+    "rememberInput",
+    "rememberDurationInput",
     `
       const SAVED_LOGIN_STORAGE_KEY = "cofferSavedLoginV1";
+      let unlockPending = false;
       let savedLogin = { email: "", password: "" };
       let savedLoginStorageTask = Promise.resolve();
       ${popupSource.slice(savedLoginStart, savedLoginEnd)}
-      return { forgetSavedLoginField, loadSavedLogin, saveSelectedLogin, validSavedLogin };
+      return {
+        clearPasswordInput,
+        forgetSavedLoginField,
+        loadSavedLogin,
+        saveSelectedLogin,
+        setUnlockPendingState: (value) => { unlockPending = value; },
+        syncRememberSessionControls,
+        validSavedLogin,
+      };
     `,
-  )(browser, emailInput, passwordInput, rememberEmailInput, rememberPasswordInput);
-  return { helpers, localState, emailInput, passwordInput, rememberEmailInput, rememberPasswordInput };
+  )(
+    browser,
+    emailInput,
+    passwordInput,
+    rememberEmailInput,
+    rememberPasswordInput,
+    rememberInput,
+    rememberDurationInput,
+  );
+  return {
+    helpers,
+    localState,
+    emailInput,
+    passwordInput,
+    rememberEmailInput,
+    rememberPasswordInput,
+    rememberInput,
+    rememberDurationInput,
+  };
 }
+
+const gatedRememberSession = savedLoginHarness({});
+await gatedRememberSession.helpers.loadSavedLogin();
+assert.equal(gatedRememberSession.rememberInput.disabled, true);
+assert.equal(gatedRememberSession.rememberDurationInput.disabled, true);
+gatedRememberSession.rememberPasswordInput.checked = true;
+gatedRememberSession.helpers.syncRememberSessionControls();
+assert.equal(gatedRememberSession.rememberInput.disabled, true);
+assert.equal(gatedRememberSession.rememberDurationInput.disabled, true);
+gatedRememberSession.passwordInput.value = "typed password";
+gatedRememberSession.helpers.syncRememberSessionControls();
+assert.equal(gatedRememberSession.rememberInput.disabled, false);
+assert.equal(gatedRememberSession.rememberDurationInput.disabled, false);
+assert.equal(gatedRememberSession.rememberInput.checked, false);
+gatedRememberSession.rememberInput.checked = true;
+gatedRememberSession.rememberPasswordInput.checked = false;
+gatedRememberSession.helpers.syncRememberSessionControls();
+assert.equal(gatedRememberSession.rememberInput.checked, false);
+assert.equal(gatedRememberSession.rememberInput.disabled, true);
+assert.equal(gatedRememberSession.rememberDurationInput.disabled, true);
+gatedRememberSession.rememberPasswordInput.checked = true;
+gatedRememberSession.helpers.syncRememberSessionControls();
+gatedRememberSession.rememberInput.checked = true;
+gatedRememberSession.helpers.setUnlockPendingState(true);
+gatedRememberSession.helpers.syncRememberSessionControls();
+assert.equal(gatedRememberSession.rememberInput.checked, true);
+assert.equal(gatedRememberSession.rememberInput.disabled, true);
+assert.equal(gatedRememberSession.rememberDurationInput.disabled, true);
+gatedRememberSession.helpers.setUnlockPendingState(false);
+gatedRememberSession.helpers.syncRememberSessionControls();
+assert.equal(gatedRememberSession.rememberInput.checked, true);
+assert.equal(gatedRememberSession.rememberInput.disabled, false);
+assert.equal(gatedRememberSession.rememberDurationInput.disabled, false);
+gatedRememberSession.helpers.clearPasswordInput();
+assert.equal(gatedRememberSession.passwordInput.value, "");
+assert.equal(gatedRememberSession.rememberInput.checked, false);
+assert.equal(gatedRememberSession.rememberInput.disabled, true);
+assert.equal(gatedRememberSession.rememberDurationInput.disabled, true);
 
 const savedCredentials = savedLoginHarness({
   cofferSavedLoginV1: { email: "saved@example.com", password: "saved password" },
@@ -156,6 +233,8 @@ assert.equal(savedCredentials.emailInput.value, "saved@example.com");
 assert.equal(savedCredentials.passwordInput.value, "saved password");
 assert.equal(savedCredentials.rememberEmailInput.checked, true);
 assert.equal(savedCredentials.rememberPasswordInput.checked, true);
+assert.equal(savedCredentials.rememberInput.disabled, false);
+assert.equal(savedCredentials.rememberDurationInput.disabled, false);
 savedCredentials.rememberEmailInput.checked = false;
 await savedCredentials.helpers.saveSelectedLogin("new@example.com", "new password");
 assert.deepEqual(savedCredentials.localState.cofferSavedLoginV1, { email: "", password: "new password" });
@@ -171,6 +250,8 @@ assert.equal(managerFilled.emailInput.value, "manager@example.com");
 assert.equal(managerFilled.passwordInput.value, "manager password");
 assert.equal(managerFilled.rememberEmailInput.checked, false);
 assert.equal(managerFilled.rememberPasswordInput.checked, false);
+assert.equal(managerFilled.rememberInput.disabled, true);
+assert.equal(managerFilled.rememberDurationInput.disabled, true);
 
 const popupPreferencesStart = popupSource.indexOf("function validGroupNames");
 const popupPreferencesEnd = popupSource.indexOf("function writePopupPreferences", popupPreferencesStart);
@@ -667,5 +748,40 @@ await offlineRequest;
 assert.deepEqual(offlineReload.observed.applied, []);
 assert.deepEqual(offlineReload.observed.warnings, [{ message: "Connection unavailable.", tone: "warning" }]);
 assert.equal(offlineReload.refreshVaultButton.disabled, false);
+
+const unlockPendingStart = popupSource.indexOf("function setUnlockPending");
+const unlockPendingEnd = popupSource.indexOf('connectionForm.addEventListener("submit"', unlockPendingStart);
+assert.notEqual(unlockPendingStart, -1);
+assert.notEqual(unlockPendingEnd, -1);
+const unlockPendingControls = {
+  unlockButton: { disabled: false },
+  originInput: { disabled: false },
+  openCofferButton: { disabled: false },
+  emailInput: { disabled: false },
+  passwordInput: { disabled: false },
+  rememberEmailInput: { disabled: false },
+  rememberPasswordInput: { disabled: false },
+};
+let rememberSessionSyncs = 0;
+const unlockPendingHarness = new Function(
+  ...Object.keys(unlockPendingControls),
+  "syncRememberSessionControls",
+  `
+    let unlockPending = false;
+    ${popupSource.slice(unlockPendingStart, unlockPendingEnd)}
+    return { setUnlockPending, isPending: () => unlockPending };
+  `,
+)(
+  ...Object.values(unlockPendingControls),
+  () => { rememberSessionSyncs += 1; },
+);
+unlockPendingHarness.setUnlockPending(true);
+assert.equal(unlockPendingHarness.isPending(), true);
+for (const control of Object.values(unlockPendingControls)) assert.equal(control.disabled, true);
+assert.equal(rememberSessionSyncs, 1);
+unlockPendingHarness.setUnlockPending(false);
+assert.equal(unlockPendingHarness.isPending(), false);
+for (const control of Object.values(unlockPendingControls)) assert.equal(control.disabled, false);
+assert.equal(rememberSessionSyncs, 2);
 
 console.log("Verified popup copy behavior, saved sign-in fields, username animation, inline autofill wiring, and vault reload races.");

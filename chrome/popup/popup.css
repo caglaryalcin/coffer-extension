@@ -145,6 +145,11 @@ button {
   border-top: 1px solid var(--line);
 }
 
+.auth-field {
+  display: grid;
+  gap: 7px;
+}
+
 h2 {
   margin: 0;
   font-size: 12px;
@@ -288,19 +293,8 @@ select:focus {
   color: var(--text);
 }
 
-.saved-login-options {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.saved-login-options legend {
-  padding: 0 5px;
-  color: var(--muted);
-  font-size: 12px;
+.remember-session-row:has(> input:disabled) {
+  opacity: .55;
 }
 
 .status-card {
