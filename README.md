@@ -18,7 +18,7 @@ Encrypted vault data is decrypted locally, secrets and OTP codes are not persist
 
 ## Website matching
 
-Saved Website URLs restrict an account to matching hosts and subdomains with the same protocol and port (with exact matching for IP, localhost, and single-label hosts), while accounts without URLs use service metadata; inline suggestions match the containing frame, popup **Fill** matches the main page, and **Refresh vault** loads URL changes.
+Saved Website URLs restrict inline suggestions to matching hosts and subdomains with the same protocol and port (with exact matching for IP, localhost, and single-label hosts), while accounts without URLs use service metadata. Popup **Fill** is always an explicit manual action: after filling an unmatched page, the extension offers to add that page's origin to the card's Website URLs and, only after confirmation, encrypts and saves the updated vault through Coffer. **Refresh vault** loads URL changes made elsewhere.
 
 ## Temporary Install
 
@@ -63,5 +63,8 @@ AMO listing text, reviewer notes, and permission rationale are in `docs/`.
 Local development, production, and self-hosted Coffer accept Firefox and Chrome
 extension origins directly. Use HTTPS for non-localhost Coffer URLs.
 
-The vault API route grants browser extensions access only to `identify` and
-`login`; all vault mutations stay same-origin only.
+The vault API route grants browser extensions access to `identify`, `login`,
+and the authenticated `save_from_extension` operation used for a confirmed
+Website URL update. The extension encrypts the complete updated vault locally;
+the server applies its normal authentication and revision checks without seeing
+the card URL or other plaintext vault fields.

@@ -10,7 +10,7 @@ Coffer for Firefox is a small companion extension for Coffer, a self-hosted auth
 
 The Coffer tab does not need to be open. Your vault remains encrypted on the server and is decrypted locally in the extension after you enter your Coffer password.
 
-Set Website URLs on your Coffer cards to control matching sites. Multiple addresses are supported, and saved URLs restrict both inline suggestions and popup Fill. After editing a card, use Refresh vault in the extension header to load your changes.
+Set Website URLs on your Coffer cards to control automatic inline suggestions. Multiple addresses are supported. Popup **Fill** remains an explicit manual action on unmatched pages; after a successful fill, the extension asks whether to add that page's origin to the card and saves the locally encrypted vault only if you confirm. Use Refresh vault to load changes made elsewhere.
 
 ## Categories
 
@@ -42,7 +42,8 @@ Data handling:
 - Generated TOTP codes are never written to extension storage and reach the clipboard or a page field only after the user explicitly selects that action.
 - HTTP and HTTPS page URLs and focused form-field metadata are inspected locally to match accounts and detect likely one-time-code fields. The inline helper stays dormant until such a field is focused.
 - Matching account summaries are sent to the page only while Coffer is unlocked; a current code is written to the field only after the user chooses a suggestion. The **Fill** button remains available as a manual alternative.
-- Coffer allows browser-extension origins only for `identify` and `login`; vault mutations remain same-origin on the Coffer web app.
+- After a successful manual fill on an unmatched page, the extension may offer to add that page's origin to the selected card. It changes nothing unless the user confirms; after confirmation, the complete vault is encrypted locally and only encrypted payload, authentication proof, vault identifier, and expected revision data are sent to the configured Coffer server.
+- Coffer allows browser-extension origins for `identify`, `login`, and the dedicated authenticated `save_from_extension` action. Other vault mutations remain same-origin on the Coffer web app.
 
 Third-party libraries:
 - `vendor/argon2.umd.min.js` is `hash-wasm` version `4.12.0`, MIT licensed.

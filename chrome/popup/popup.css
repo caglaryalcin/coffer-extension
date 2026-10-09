@@ -315,6 +315,44 @@ select:focus {
   color: #e8b0b0;
 }
 
+.url-suggestion-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-color: rgba(220, 148, 74, .5);
+  background: rgba(220, 148, 74, .1);
+}
+
+.url-suggestion-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.url-suggestion-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.url-suggestion-actions button {
+  min-height: 32px;
+  padding: 0 11px;
+}
+
+.url-suggestion-dismiss {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.url-suggestion-save {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
 .settings-card {
   display: grid;
   gap: 12px;

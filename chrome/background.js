@@ -106,6 +106,7 @@ const PROVIDER_DOMAIN_FAMILIES = [
 ];
 
 let activeSession = null;
+let vaultMutationPending = false;
 let sessionEpoch = 0;
 let sessionRestorePromise = null;
 let sessionRestoreWarning = "";
@@ -1754,6 +1755,7 @@ async function restoreRememberedSession(settings) {
         remembered: true,
         revision: login.revision,
         runtime,
+        payload: decrypted,
         sessionId: record.sessionId,
         unlockedAt: record.unlockedAt,
         vault,
@@ -2050,6 +2052,7 @@ async function unlockCoffer(credentials) {
       remembered: credentials.rememberLogin,
       revision: login.revision,
       runtime,
+      payload: decrypted,
       sessionId: credentials.rememberLogin ? createSessionId() : null,
       unlockedAt: now,
       vault,
@@ -2108,6 +2111,7 @@ async function refreshVault() {
     const decrypted = await decryptVaultPayload(login.payload, session.runtime.vaultKey);
     if (activeSession !== session) return await publicVaultState(settings);
     session.vault = parseVaultPayload(decrypted);
+    session.payload = decrypted;
     session.revision = login.revision;
     return {
       ok: true,
@@ -2301,16 +2305,10 @@ async function fillCode(accountId) {
     };
   }
 
-  if (account.urls?.length > 0 &&
-      !accountMatchesPage(account, pageContextFromUrl(tab.url, settings))) {
-    return {
-      ok: false,
-      error: {
-        code: "url_mismatch",
-        message: "This page does not match this account's Website URLs. Add its address in Coffer, or copy the code manually.",
-      },
-    };
-  }
+  const pageMatchesAccount = accountMatchesPage(
+    account,
+    pageContextFromUrl(tab.url, settings),
+  );
 
   const rawCode = await generateTotp(
     account.secret,
@@ -2351,7 +2349,17 @@ async function fillCode(accountId) {
         },
       };
     }
-    return { ok: true };
+    return {
+      ok: true,
+      ...(pageMatchesAccount
+        ? {}
+        : {
+            urlSuggestion: {
+              accountId: account.id,
+              url: tabUrl.origin,
+            },
+          }),
+    };
   } catch {
     return {
       ok: false,
@@ -2398,6 +2406,204 @@ async function hiddenPopupGroups() {
     return new Set(hiddenGroups.filter((group) => typeof group === "string"));
   } catch {
     return new Set();
+  }
+}
+
+async function addAccountUrl(accountId, pageUrl) {
+  if (typeof accountId !== "string") {
+    return {
+      ok: false,
+      error: { code: "invalid_account", message: "Choose a Coffer account first." },
+    };
+  }
+  let normalizedUrl;
+  let parsedUrl;
+  try {
+    normalizedUrl = readAccountUrl(pageUrl);
+    parsedUrl = normalizedUrl ? new URL(normalizedUrl) : null;
+    normalizedUrl = parsedUrl ? new URL(parsedUrl.origin).href : null;
+  } catch {
+    normalizedUrl = null;
+    parsedUrl = null;
+  }
+  if (!normalizedUrl) {
+    return {
+      ok: false,
+      error: { code: "invalid_url", message: "The page URL is not valid." },
+    };
+  }
+  if (vaultMutationPending) {
+    return {
+      ok: false,
+      error: { code: "save_pending", message: "Coffer is already saving a vault change." },
+    };
+  }
+
+  vaultMutationPending = true;
+  try {
+    const settings = await readSettings();
+    if (!(await sessionIsAvailable(settings))) {
+      return {
+        ok: false,
+        error: { code: "vault_locked", message: "Sign in before adding a Website URL." },
+      };
+    }
+    const session = activeSession;
+    if (!session || !isRecord(session.payload) || !Array.isArray(session.payload.accounts)) {
+      return {
+        ok: false,
+        error: { code: "vault_locked", message: "Refresh Coffer and try again." },
+      };
+    }
+    if (parsedUrl.origin === settings.cofferOrigin) {
+      return {
+        ok: false,
+        error: { code: "coffer_url", message: "The Coffer URL cannot be added to an account." },
+      };
+    }
+    const accountIndex = session.vault.accounts.findIndex((candidate) => (
+      candidate.id === accountId && !candidate.archived
+    ));
+    const account = session.vault.accounts[accountIndex];
+    if (!account) {
+      return {
+        ok: false,
+        error: { code: "account_not_found", message: "This Coffer account is no longer available." },
+      };
+    }
+    if (account.urls.includes(normalizedUrl)) {
+      return { ok: true, vault: await publicVaultState(settings) };
+    }
+    if (account.urls.length >= MAX_ACCOUNT_URLS) {
+      return {
+        ok: false,
+        error: {
+          code: "too_many_urls",
+          message: `This account already has the maximum of ${MAX_ACCOUNT_URLS} Website URLs.`,
+        },
+      };
+    }
+
+    const sourceAccount = session.payload.accounts[accountIndex];
+    if (!isRecord(sourceAccount)) {
+      return {
+        ok: false,
+        error: { code: "invalid_vault", message: "Refresh Coffer and try again." },
+      };
+    }
+    const nextPayload = structuredClone(session.payload);
+    const nextAccount = nextPayload.accounts[accountIndex];
+    if (Object.hasOwn(sourceAccount, "urls")) {
+      if (!Array.isArray(sourceAccount.urls)) {
+        return {
+          ok: false,
+          error: { code: "invalid_vault", message: "Refresh Coffer and try again." },
+        };
+      }
+      nextAccount.urls = [...account.urls, normalizedUrl];
+    } else if (Object.hasOwn(sourceAccount, "url") && account.urls.length === 0) {
+      nextAccount.url = normalizedUrl;
+    } else {
+      return {
+        ok: false,
+        error: {
+          code: "vault_upgrade_required",
+          message: "Open Coffer once to upgrade this vault before adding another Website URL.",
+        },
+      };
+    }
+    if (typeof nextPayload.updatedAt === "string") {
+      nextPayload.updatedAt = new Date().toISOString();
+    }
+
+    const expectedRevision = session.revision;
+    const [authProof, payload] = await Promise.all([
+      createAuthProof(session.runtime.authKey),
+      encryptVaultPayload(nextPayload, session.runtime.vaultKey),
+    ]);
+    if (activeSession !== session || session.expiresAt <= Date.now()) {
+      return {
+        ok: false,
+        error: { code: "vault_locked", message: "Sign in before adding a Website URL." },
+      };
+    }
+    const saved = await requestVault(settings.cofferOrigin, {
+      action: "save_from_extension",
+      identifier: session.identifier,
+      authProof,
+      vaultId: session.vaultId,
+      expectedRevision,
+      payload,
+    });
+    if (!saved.ok) {
+      if (saved.error?.code === "revision_conflict") {
+        await refreshVault();
+        return {
+          ok: false,
+          error: {
+            code: "revision_conflict",
+            message: "The vault changed in Coffer. Review the refreshed account and try again.",
+          },
+        };
+      }
+      return saved;
+    }
+    if (!isRecord(saved.body) || saved.body.revision !== expectedRevision + 1) {
+      return {
+        ok: false,
+        error: { code: "invalid_response", message: "Coffer returned an invalid save result." },
+      };
+    }
+    if (activeSession !== session) {
+      return { ok: true, vault: null };
+    }
+    session.payload = nextPayload;
+    session.vault = parseVaultPayload(nextPayload);
+    session.revision = saved.body.revision;
+    return { ok: true, vault: await publicVaultState(settings) };
+  } catch {
+    return {
+      ok: false,
+      error: { code: "save_failed", message: "Coffer could not add this Website URL." },
+    };
+  } finally {
+    vaultMutationPending = false;
+  }
+}
+
+async function encryptVaultPayload(payload, vaultKey) {
+  let plaintext;
+  const iv = crypto.getRandomValues(new Uint8Array(GCM_IV_BYTES));
+  try {
+    const serialized = JSON.stringify(payload);
+    if (serialized === undefined) throw new Error("Vault payload is not valid JSON.");
+    plaintext = UTF8.encode(serialized);
+    if (plaintext.byteLength > MAX_VAULT_PAYLOAD_BYTES) {
+      throw new Error("Vault payload exceeds its size limit.");
+    }
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv: webCryptoBytes(iv),
+        additionalData: webCryptoBytes(UTF8.encode(PAYLOAD_AAD_CONTEXT)),
+        tagLength: 128,
+      },
+      vaultKey,
+      webCryptoBytes(plaintext),
+    ));
+    try {
+      return {
+        algorithm: "AES-256-GCM",
+        iv: bytesToBase64(iv),
+        ciphertext: bytesToBase64(ciphertext),
+        tagLength: 128,
+      };
+    } finally {
+      ciphertext.fill(0);
+    }
+  } finally {
+    plaintext?.fill(0);
+    iv.fill(0);
   }
 }
 
@@ -2509,6 +2715,7 @@ function handleMessage(message, sender = null) {
   if (message.type === "unlock-coffer") return unlockCoffer(message.credentials);
   if (message.type === "refresh-vault") return refreshVault();
   if (message.type === "fill-code") return fillCode(message.accountId);
+  if (message.type === "add-account-url") return addAccountUrl(message.accountId, message.url);
   if (message.type === "session-keepalive") return sessionKeepalive();
   if (message.type === "lock-coffer") {
     return clearSession().then(() => ({ ok: true }));

@@ -27,11 +27,19 @@ for (const browserName of ["chrome", "firefox"]) {
     ${source.slice(runtimeStart, runtimeEnd)}
     readSettings = async () => ({ cofferOrigin: hooks.cofferOrigin });
     sessionIsAvailable = async () => hooks.available;
+    const productionEncryptVaultPayload = encryptVaultPayload;
     generateTotp = async () => {
       hooks.generated += 1;
       hooks.onGenerate?.();
       return hooks.code;
     };
+    encryptVaultPayload = async (payload) => ({ encryptedPayload: structuredClone(payload) });
+    createAuthProof = async () => "test-auth-proof";
+    requestVault = async (origin, body) => {
+      hooks.requests.push({ origin, body });
+      return hooks.saveResponse ?? { ok: true, body: { revision: 6, updatedAt: new Date().toISOString() } };
+    };
+    publicVaultState = async () => ({ ok: true, accounts: [], pageMatches: [] });
     clearSessionIfCurrent = async (session) => {
       if (activeSession === session) {
         hooks.cleared += 1;
@@ -41,9 +49,17 @@ for (const browserName of ["chrome", "firefox"]) {
     activeSession = {
       cofferOrigin: hooks.cofferOrigin,
       expiresAt: Date.now() + 60_000,
+      identifier: "test@example.test",
+      payload: { format: "coffer-vault", version: 11, accounts: [structuredClone(hooks.account)], updatedAt: new Date(0).toISOString() },
+      revision: 5,
+      runtime: { authKey: {}, vaultKey: {} },
       vault: { accounts: [parseVaultAccount(hooks.account)] },
+      vaultId: "test-vault-id",
     };
     return {
+      addAccountUrl,
+      decryptVaultPayload,
+      encryptVaultPayload: productionEncryptVaultPayload,
       fillCode,
       pageFillTotpCode,
       expire: () => { activeSession.expiresAt = Date.now() - 1; },
@@ -59,6 +75,7 @@ for (const browserName of ["chrome", "firefox"]) {
       generated: 0,
       cleared: 0,
       injections: [],
+      requests: [],
       tabUrl,
       onQuery: null,
       onGenerate: null,
@@ -89,6 +106,24 @@ for (const browserName of ["chrome", "firefox"]) {
     return { runtime, observed, pageWindow };
   }
 
+  const cryptoHarness = harness();
+  const vaultKey = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  const samplePayload = {
+    format: "coffer-vault",
+    accounts: [{ id: "round-trip", urls: ["https://example.test/"] }],
+  };
+  const encryptedPayload = await cryptoHarness.runtime.encryptVaultPayload(samplePayload, vaultKey);
+  assert.equal(encryptedPayload.algorithm, "AES-256-GCM");
+  assert.deepEqual(
+    await cryptoHarness.runtime.decryptVaultPayload(encryptedPayload, vaultKey),
+    samplePayload,
+    `${browserName}: extension-written payloads must use Coffer's existing vault cipher format.`,
+  );
+
   for (const tabUrl of [
     "https://github.unrelated.test/login",
     "https://github.com.unrelated.test/login",
@@ -98,10 +133,12 @@ for (const browserName of ["chrome", "firefox"]) {
   ]) {
     const { runtime, observed } = harness({ tabUrl });
     const result = await runtime.fillCode(accountInput.id);
-    assert.equal(result.ok, false, `${browserName}: ${tabUrl} must be blocked.`);
-    assert.equal(result.error.code, "url_mismatch");
-    assert.equal(observed.generated, 0, "A mismatched site must not generate a code.");
-    assert.equal(observed.injections.length, 0, "A mismatched site must not receive a script.");
+    assert.deepEqual(result, {
+      ok: true,
+      urlSuggestion: { accountId: accountInput.id, url: new URL(tabUrl).origin },
+    }, `${browserName}: a mismatched site must fill and offer to save its URL.`);
+    assert.equal(observed.generated, 1, "A mismatched site must generate a code after an explicit Fill click.");
+    assert.equal(observed.injections.length, 1, "A mismatched site must receive the explicitly requested fill script.");
   }
 
   for (const tabUrl of ["https://github.com/login", "https://login.github.com/verify"]) {
@@ -116,12 +153,33 @@ for (const browserName of ["chrome", "firefox"]) {
   }
 
   const manual = harness({ urls: [], tabUrl: "https://unrelated.test/verify" });
-  assert.deepEqual(await manual.runtime.fillCode(accountInput.id), { ok: true });
+  assert.equal((await manual.runtime.fillCode(accountInput.id)).ok, true);
   assert.equal(manual.observed.injections.length, 1, "URL-less accounts retain manual fill.");
 
   const legacyManual = harness({ omitUrls: true, tabUrl: "https://unrelated.test/verify" });
-  assert.deepEqual(await legacyManual.runtime.fillCode(accountInput.id), { ok: true });
+  assert.equal((await legacyManual.runtime.fillCode(accountInput.id)).ok, true);
   assert.equal(legacyManual.observed.injections.length, 1, "Older accounts without URL fields retain manual fill.");
+
+  const connectedSave = harness({ tabUrl: "https://accounts.unrelated.test/verify" });
+  const filled = await connectedSave.runtime.fillCode(accountInput.id);
+  assert.equal(filled.ok, true);
+  const saved = await connectedSave.runtime.addAccountUrl(
+    accountInput.id,
+    filled.urlSuggestion.url,
+  );
+  assert.equal(saved.ok, true, `${browserName}: the suggested URL must save through Coffer.`);
+  assert.equal(connectedSave.observed.requests.length, 1);
+  const saveRequest = connectedSave.observed.requests[0];
+  assert.equal(saveRequest.origin, cofferOrigin);
+  assert.equal(saveRequest.body.action, "save_from_extension");
+  assert.equal(saveRequest.body.identifier, "test@example.test");
+  assert.equal(saveRequest.body.vaultId, "test-vault-id");
+  assert.equal(saveRequest.body.expectedRevision, 5);
+  assert.equal(saveRequest.body.authProof, "test-auth-proof");
+  assert.deepEqual(
+    saveRequest.body.payload.encryptedPayload.accounts[0].urls,
+    ["https://github.com/", "https://accounts.unrelated.test/"],
+  );
 
   for (const origin of ["https://unrelated.test", "http://github.com", "null"]) {
     const changed = harness();
@@ -158,4 +216,4 @@ for (const browserName of ["chrome", "firefox"]) {
   assert.equal(expiredDuringGeneration.observed.cleared, 1);
 }
 
-console.log("Verified popup URL restrictions, navigation guards, and session expiry before filling in Chrome and Firefox.");
+console.log("Verified manual fill URL suggestions, encrypted URL saves, navigation guards, and session expiry in Chrome and Firefox.");

@@ -20,6 +20,9 @@ assert.doesNotMatch(popupHtml, />\s*All Codes\s*</u);
 assert.doesNotMatch(popupHtml, /id="codes-title"/u);
 assert.match(popupHtml, /id="all-codes" aria-label="All codes"/u);
 assert.match(popupHtml, /id="copy-status" role="status" aria-live="polite"/u);
+assert.match(popupHtml, /id="url-suggestion"[^>]*aria-labelledby="url-suggestion-message"/u);
+assert.match(popupHtml, /id="dismiss-url-suggestion">Not now</u);
+assert.match(popupHtml, /id="save-url-suggestion">Add URL</u);
 assert.match(popupHtml, /id="coffer-remember-duration"/u);
 assert.match(popupHtml, /<option value="43200000">12h<\/option>/u);
 assert.match(popupHtml, /<option value="86400000">24h<\/option>/u);
@@ -98,6 +101,74 @@ assert.match(popupSource, /updateRenderedCountdowns\(latestCodes\);/u);
 assert.match(popupCss, /@keyframes username-pan/u);
 assert.match(popupCss, /animation: username-pan var\(--username-overflow-duration\) ease-in-out infinite alternate;/u);
 assert.match(popupCss, /@media \(prefers-reduced-motion: reduce\)/u);
+assert.match(popupCss, /\.url-suggestion-card \{/u);
+assert.match(popupSource, /if \(response\.urlSuggestion\) showUrlSuggestion\(account, response\.urlSuggestion\);/u);
+
+const suggestionStart = popupSource.indexOf("function hideUrlSuggestion");
+const suggestionEnd = popupSource.indexOf("function initials", suggestionStart);
+assert.notEqual(suggestionStart, -1, "Could not find URL suggestion helpers.");
+assert.notEqual(suggestionEnd, -1, "Could not find the end of URL suggestion helpers.");
+const suggestionMessages = [];
+const suggestionStates = [];
+const suggestionRequests = [];
+const urlSuggestionBox = { hidden: true };
+const urlSuggestionMessage = { textContent: "" };
+const dismissUrlSuggestionButton = { disabled: false };
+const saveUrlSuggestionButton = { disabled: false, textContent: "Add URL" };
+const suggestionHarness = new Function(
+  "browser",
+  "urlSuggestionBox",
+  "urlSuggestionMessage",
+  "dismissUrlSuggestionButton",
+  "saveUrlSuggestionButton",
+  "applyVaultState",
+  "setStatus",
+  "errorMessage",
+  `
+    let pendingUrlSuggestion = null;
+    let urlSuggestionSaving = false;
+    ${popupSource.slice(suggestionStart, suggestionEnd)}
+    return { hideUrlSuggestion, saveSuggestedUrl, showUrlSuggestion };
+  `,
+)(
+  {
+    runtime: {
+      async sendMessage(message) {
+        suggestionRequests.push(message);
+        return { ok: true, vault: { ok: true, accounts: [], pageMatches: [] } };
+      },
+    },
+  },
+  urlSuggestionBox,
+  urlSuggestionMessage,
+  dismissUrlSuggestionButton,
+  saveUrlSuggestionButton,
+  (vault) => suggestionStates.push(vault),
+  (message, tone) => suggestionMessages.push({ message, tone }),
+  (response, fallback) => response?.error?.message ?? fallback,
+);
+suggestionHarness.showUrlSuggestion(
+  { id: "account-1", service: "Example" },
+  { accountId: "account-1", url: "https://login.example.test/path?private=value" },
+);
+assert.equal(urlSuggestionBox.hidden, false);
+assert.equal(
+  urlSuggestionMessage.textContent,
+  "Add https://login.example.test to Example's Website URLs in Coffer?",
+  "The prompt must show only the page origin, not its path or query.",
+);
+await suggestionHarness.saveSuggestedUrl();
+assert.deepEqual(suggestionRequests, [{
+  type: "add-account-url",
+  accountId: "account-1",
+  url: "https://login.example.test",
+}]);
+assert.equal(urlSuggestionBox.hidden, true);
+assert.deepEqual(suggestionStates, [{ ok: true, accounts: [], pageMatches: [] }]);
+assert.deepEqual(suggestionMessages, [{
+  message: "https://login.example.test was added to Example.",
+  tone: "success",
+}]);
 
 const metricsStart = popupSource.indexOf("function usernameOverflowMetrics");
 const metricsEnd = popupSource.indexOf("function measureUsernameOverflow", metricsStart);
@@ -285,6 +356,7 @@ assert.match(backgroundSource, /const MAX_REMEMBERED_UNLOCK_MS = 7 \* 24 \* 60 \
 assert.match(backgroundSource, /REMEMBERED_UNLOCK_DURATIONS_MS\.has\(rememberDurationMs\)/u);
 assert.match(backgroundSource, /accountIsInVisiblePopupGroup\(account, hiddenGroups\)/u);
 assert.match(backgroundSource, /accounts: vault\.pageMatches\.map\(\(account\) => \(\{/u);
+assert.match(backgroundSource, /if \(message\.type === "add-account-url"\) return addAccountUrl\(message\.accountId, message\.url\);/u);
 assert.match(backgroundSource, /iconSvg: logos\.get\(account\.iconUrl\) \?\? null,/u);
 assert.match(backgroundSource, /period: account\.period,/u);
 

@@ -13,6 +13,10 @@ const settingsPanel = document.querySelector("#popup-settings");
 const closeSettingsButton = document.querySelector("#close-settings");
 const groupVisibilityList = document.querySelector("#group-visibility-list");
 const statusBox = document.querySelector("#status");
+const urlSuggestionBox = document.querySelector("#url-suggestion");
+const urlSuggestionMessage = document.querySelector("#url-suggestion-message");
+const dismissUrlSuggestionButton = document.querySelector("#dismiss-url-suggestion");
+const saveUrlSuggestionButton = document.querySelector("#save-url-suggestion");
 const copyStatus = document.querySelector("#copy-status");
 const authCard = document.querySelector("#auth-card");
 const emailInput = document.querySelector("#coffer-email");
@@ -58,6 +62,8 @@ let copyWriteEpoch = 0;
 let activeCopyButton = null;
 let activeCopyEpoch = 0;
 let invalidatedCopyEpoch = 0;
+let pendingUrlSuggestion = null;
+let urlSuggestionSaving = false;
 let savedLogin = { email: "", password: "" };
 let savedLoginStorageTask = Promise.resolve();
 let popupPreferences = { collapsedGroups: new Set(), hiddenGroups: new Set() };
@@ -74,6 +80,69 @@ function clearStatus() {
   statusBox.textContent = "";
   statusBox.className = "status-card";
   statusBox.hidden = true;
+}
+
+function hideUrlSuggestion() {
+  pendingUrlSuggestion = null;
+  urlSuggestionSaving = false;
+  urlSuggestionMessage.textContent = "";
+  urlSuggestionBox.hidden = true;
+  dismissUrlSuggestionButton.disabled = false;
+  saveUrlSuggestionButton.disabled = false;
+  saveUrlSuggestionButton.textContent = "Add URL";
+}
+
+function showUrlSuggestion(account, suggestion) {
+  if (
+    !suggestion ||
+    suggestion.accountId !== account.id ||
+    typeof suggestion.url !== "string"
+  ) return;
+  let origin;
+  try {
+    origin = new URL(suggestion.url).origin;
+  } catch {
+    return;
+  }
+  pendingUrlSuggestion = { accountId: account.id, service: account.service, url: origin };
+  urlSuggestionMessage.textContent = `Add ${origin} to ${account.service}'s Website URLs in Coffer?`;
+  urlSuggestionBox.hidden = false;
+  dismissUrlSuggestionButton.disabled = false;
+  saveUrlSuggestionButton.disabled = false;
+  saveUrlSuggestionButton.textContent = "Add URL";
+}
+
+async function saveSuggestedUrl() {
+  if (!pendingUrlSuggestion || urlSuggestionSaving) return;
+  const suggestion = pendingUrlSuggestion;
+  urlSuggestionSaving = true;
+  dismissUrlSuggestionButton.disabled = true;
+  saveUrlSuggestionButton.disabled = true;
+  saveUrlSuggestionButton.textContent = "Adding…";
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: "add-account-url",
+      accountId: suggestion.accountId,
+      url: suggestion.url,
+    });
+    if (!response?.ok) {
+      setStatus(errorMessage(response, "Coffer could not add this Website URL."), "warning");
+      urlSuggestionSaving = false;
+      dismissUrlSuggestionButton.disabled = false;
+      saveUrlSuggestionButton.disabled = false;
+      saveUrlSuggestionButton.textContent = "Try again";
+      return;
+    }
+    hideUrlSuggestion();
+    if (response.vault?.ok) applyVaultState(response.vault);
+    setStatus(`${suggestion.url} was added to ${suggestion.service}.`, "success");
+  } catch {
+    setStatus("The browser could not add this Website URL.", "warning");
+    urlSuggestionSaving = false;
+    dismissUrlSuggestionButton.disabled = false;
+    saveUrlSuggestionButton.disabled = false;
+    saveUrlSuggestionButton.textContent = "Try again";
+  }
 }
 
 function initials(value) {
@@ -352,6 +421,7 @@ async function fillCode(account, button) {
     }
     clearStatus();
     button.textContent = "Filled";
+    if (response.urlSuggestion) showUrlSuggestion(account, response.urlSuggestion);
     window.setTimeout(() => {
       button.textContent = "Fill";
       button.disabled = false;
@@ -913,6 +983,7 @@ function setVaultVisible(visible) {
   if (settingsVisible) pageCodesSection.hidden = true;
   if (!visible) {
     invalidateCopyOperations();
+    hideUrlSuggestion();
     setSettingsVisible(false);
     if (iconRefreshTimer !== null) window.clearTimeout(iconRefreshTimer);
     iconRefreshTimer = null;
@@ -1205,6 +1276,14 @@ settingsButton.addEventListener("click", () => {
 closeSettingsButton.addEventListener("click", () => {
   setSettingsVisible(false);
   settingsButton.focus();
+});
+
+dismissUrlSuggestionButton.addEventListener("click", () => {
+  hideUrlSuggestion();
+});
+
+saveUrlSuggestionButton.addEventListener("click", () => {
+  void saveSuggestedUrl();
 });
 
 async function initialize() {

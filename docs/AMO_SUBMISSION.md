@@ -36,7 +36,8 @@ Use `docs/AMO_LISTING.md` for the listing fields and reviewer notes.
 - **Keep unlocked** becomes available only after the user enters a password and selects **Remember password on this device**. If enabled, it stores only resume key material and bounded session metadata in extension-only `storage.local` for the selected duration, up to 1 week. It does not store the decrypted vault, TOTP secrets, or generated codes there; the separately remembered password and this option should be used only on a trusted device.
 - TOTP codes are generated locally and are never written to extension storage. A code is written to the clipboard or a page field only after the user explicitly selects that action.
 - The Coffer API returns encrypted vault payloads; the extension decrypts them locally after password verification.
-- Coffer accepts browser-extension origins only for read/unlock actions; vault mutations remain same-origin on the Coffer web app.
+- After a successful manual fill on an unmatched page, the extension asks whether to add that page's origin to the selected card. It saves only after confirmation, encrypts the complete updated vault locally, and sends only the encrypted payload plus authentication and revision data to the configured server.
+- Coffer accepts browser-extension origins for read/unlock actions and the dedicated authenticated `save_from_extension` action. Other vault mutations remain same-origin on the Coffer web app.
 
 ## Automated Listed Submission
 
