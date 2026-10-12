@@ -152,6 +152,38 @@
     return rect.width > 0 && rect.height > 0;
   }
 
+  function segmentedFields(field, codeLength) {
+    if (!(field instanceof HTMLInputElement)) return null;
+    const minimumLength = Number.isInteger(codeLength) ? codeLength : 6;
+    const allowedTypes = new Set(["", "number", "password", "search", "tel", "text"]);
+    const isSegment = (candidate) => (
+      candidate instanceof HTMLInputElement &&
+      !candidate.disabled &&
+      !candidate.readOnly &&
+      allowedTypes.has(candidate.type.toLowerCase()) &&
+      (
+        candidate.maxLength === 1 ||
+        candidate.type.toLowerCase() === "number" ||
+        candidate.inputMode === "numeric" ||
+        candidate.inputMode === "decimal" ||
+        /\d|0-9/u.test(candidate.pattern)
+      ) &&
+      isVisible(candidate)
+    );
+    if (!isSegment(field)) return null;
+    let root = field.parentElement;
+    while (root) {
+      const candidates = Array.from(root.querySelectorAll("input"))
+        .filter(isSegment);
+      if (candidates.includes(field) && candidates.length >= minimumLength && candidates.length <= 8) {
+        return candidates.slice(0, minimumLength);
+      }
+      if (root.matches?.("form")) break;
+      root = root.parentElement;
+    }
+    return null;
+  }
+
   function isTotpField(field) {
     if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return false;
     if (field.disabled || field.readOnly || !isVisible(field)) return false;
@@ -164,8 +196,10 @@
     if (/\bone-time-code\b/iu.test(field.autocomplete)) score += 100;
     if (POSITIVE_FIELD_PATTERN.test(text)) score += 50;
     if (field.inputMode === "numeric" || field.inputMode === "decimal") score += 12;
-    if (field instanceof HTMLInputElement && [1, 6, 7, 8].includes(field.maxLength)) score += 8;
+    if (field instanceof HTMLInputElement && field.maxLength === 1) score += 8;
+    if (field instanceof HTMLInputElement && [6, 7, 8].includes(field.maxLength)) score += 45;
     if (field instanceof HTMLInputElement && field.pattern && /\d|0-9/iu.test(field.pattern)) score += 6;
+    if (segmentedFields(field)) score += 50;
     if (NEGATIVE_FIELD_PATTERN.test(text) && !POSITIVE_FIELD_PATTERN.test(text)) score -= 100;
     return score >= 45;
   }
@@ -210,19 +244,6 @@
       field.dispatchEvent(new Event("input", { bubbles: true }));
     }
     field.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  function segmentedFields(field, codeLength) {
-    if (!(field instanceof HTMLInputElement) || field.maxLength !== 1) return null;
-    const root = field.closest("form, fieldset, [role='group']") ?? field.parentElement;
-    if (!root) return null;
-    const candidates = Array.from(root.querySelectorAll("input"))
-      .filter((candidate) => !candidate.disabled && !candidate.readOnly && candidate.maxLength === 1)
-      .filter((candidate) => ["decimal", "numeric", "tel"].includes(candidate.inputMode) || /\d|0-9/u.test(candidate.pattern))
-      .filter(isVisible);
-    return candidates.includes(field) && candidates.length >= codeLength && candidates.length <= 8
-      ? candidates.slice(0, codeLength)
-      : null;
   }
 
   function fillCode(field, rawCode) {

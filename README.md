@@ -10,7 +10,7 @@ This repository contains the Firefox and Chrome extension for Coffer. It works a
 
 ## Connection model
 
-The extension connects directly to the configured Coffer API without requiring an open Coffer tab, then displays, copies, or fills matching TOTP codes through the popup and inline suggestions while supporting group, privacy, and remembered-unlock preferences.
+The extension connects directly to the configured Coffer API without requiring an open Coffer tab, then displays, copies, or fills matching TOTP codes through the popup and inline suggestions while supporting group, privacy, and remembered-unlock preferences. Inline suggestions recognize standard one-time-code fields as well as unlabeled 6–8 digit controls rendered as one input or as segmented boxes, independent of the website or UI framework.
 
 ## Security model
 
