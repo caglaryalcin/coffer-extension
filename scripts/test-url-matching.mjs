@@ -234,7 +234,15 @@ for (const browserName of ["chrome", "firefox"]) {
     assert.deepEqual(vault.accounts[0].urls, expectedUrls, `${browserName}: Coffer v${version} URL migration`);
     assert.equal(matches(vault.accounts[0], matchingUrl, catalog), true, `${browserName}: parsed v${version} account matches website`);
     assert.equal(vault.accounts[0].secret, baseAccount.secret);
+    assert.deepEqual(vault.groupOrder, ["Work"], `${browserName}: preserve the persisted group order.`);
   }
+  for (const groupOrder of [undefined, null, "Work", {}]) {
+    assert.deepEqual(parseVaultPayload({ ...vaultFixture(11, baseAccount), groupOrder }).groupOrder, [],
+      `${browserName}: missing or invalid group order must not prevent vault loading.`);
+  }
+  assert.deepEqual(parseVaultPayload({
+    ...vaultFixture(11, baseAccount), groupOrder: [" Personal ", 42, null, "", "  ", "Work"],
+  }).groupOrder, ["Personal", "Work"], `${browserName}: ignore invalid group order entries.`);
   const multiSiteVault = parseVaultPayload(vaultFixture(11, {
     ...baseAccount,
     urls: ["https://first.example", "https://second.example"],
@@ -249,6 +257,7 @@ for (const browserName of ["chrome", "firefox"]) {
   const vaultKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   const authKey = await crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const updatedPayload = vaultFixture(11, { ...baseAccount, urls: ["https://updated.example/login"] });
+  updatedPayload.groupOrder = ["Personal", "Work"];
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt({
     name: "AES-GCM",
@@ -284,6 +293,8 @@ for (const browserName of ["chrome", "firefox"]) {
   const refreshed = await refreshRuntime.refreshVault();
   assert.equal(refreshed.ok, true, `${browserName}: refreshing a v11 encrypted vault succeeds.`);
   assert.equal(refreshed.vault.revision, 2);
+  assert.deepEqual(refreshed.vault.groupOrder, ["Personal", "Work"],
+    `${browserName}: refreshing the encrypted vault must propagate the updated group order to the popup.`);
   assert.equal(refreshed.vault.pageMatches.length, 1, `${browserName}: freshly saved URLs reach page suggestions after refresh.`);
   assert.equal(refreshed.vault.pageMatches[0].id, baseAccount.id);
 

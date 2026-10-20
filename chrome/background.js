@@ -894,6 +894,9 @@ function parseVaultPayload(value) {
   return {
     profile,
     settings,
+    groupOrder: Array.isArray(value.groupOrder)
+      ? value.groupOrder.filter((name) => typeof name === "string" && name.trim()).map((name) => name.trim())
+      : [],
     accounts: value.accounts.map(parseVaultAccount),
   };
 }
@@ -1914,6 +1917,7 @@ async function publicVaultState(settings = null, pageOverride = undefined) {
   return {
     ok: true,
     accounts,
+    groupOrder: session.vault.groupOrder ?? [],
     expiresAt: session.expiresAt,
     iconsPending,
     iconsRetryAt: iconsPending && brandCatalogPromise === null ? brandCatalogRetryAt : null,

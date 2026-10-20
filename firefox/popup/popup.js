@@ -43,6 +43,7 @@ const MAX_USERNAME_SCROLL_SECONDS = 12;
 
 let latestCodes = [];
 let latestPageCodes = [];
+let latestGroupOrder = [];
 let usernamesMasked = false;
 let refreshPromise = null;
 let refreshQueued = false;
@@ -706,10 +707,44 @@ async function loadPopupPreferences() {
   }
 }
 
+function groupOrderKey(name) {
+  return name.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("en");
+}
+
+function orderedGroupLabels(labels) {
+  const names = new Map();
+  // Keep empty parents in the hierarchy so their children retain the vault's position.
+  for (const name of [...latestGroupOrder, ...labels]) {
+    const key = groupOrderKey(name);
+    if (!names.has(key)) names.set(key, name);
+  }
+  const children = new Map();
+  const roots = [];
+  for (const [key, name] of names) {
+    const separator = name.lastIndexOf(" / ");
+    const parentKey = separator < 0 ? null : groupOrderKey(name.slice(0, separator));
+    if (parentKey === null || !names.has(parentKey)) {
+      roots.push(key);
+    } else {
+      if (!children.has(parentKey)) children.set(parentKey, []);
+      children.get(parentKey).push(key);
+    }
+  }
+  const ranks = new Map();
+  const pending = roots.reverse();
+  while (pending.length > 0) {
+    const key = pending.pop();
+    ranks.set(key, ranks.size);
+    const descendants = children.get(key) ?? [];
+    for (let index = descendants.length - 1; index >= 0; index -= 1) {
+      pending.push(descendants[index]);
+    }
+  }
+  return [...labels].sort((left, right) => ranks.get(groupOrderKey(left)) - ranks.get(groupOrderKey(right)));
+}
+
 function availableGroupLabels() {
-  return [...new Set(latestCodes.map(categoryLabel))].sort((left, right) => (
-    left.localeCompare(right, undefined, { sensitivity: "base" })
-  ));
+  return orderedGroupLabels([...new Set(latestCodes.map(categoryLabel))]);
 }
 
 function renderGroupVisibilitySettings() {
@@ -847,7 +882,7 @@ function groupedAccounts(accounts) {
     }
     group.accounts.push(account);
   }
-  return groups;
+  return orderedGroupLabels(groups.map((group) => group.label)).map((label) => byLabel.get(label));
 }
 
 function renderCodeRows(container, accounts, emptyMessage, { grouped = false } = {}) {
@@ -1016,6 +1051,7 @@ function scheduleIconRefresh(pending, retryAt = null) {
 function applyVaultState(vault, warning = "") {
   latestCodes = vault?.accounts ?? [];
   latestPageCodes = vault?.pageMatches ?? [];
+  latestGroupOrder = Array.isArray(vault?.groupOrder) ? vault.groupOrder : [];
   lastVaultTickSeconds = Math.floor(Date.now() / 1_000);
   vaultExpiresAt = Number.isFinite(vault?.expiresAt) ? vault.expiresAt : 0;
   totpRefreshPending = false;

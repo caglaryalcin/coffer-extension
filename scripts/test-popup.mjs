@@ -341,6 +341,58 @@ assert.deepEqual([...validPreferences.hiddenGroups], ["Secret"]);
 assert.deepEqual([...validatePopupPreferences(null).collapsedGroups], []);
 assert.deepEqual([...validatePopupPreferences({ hiddenGroups: "Work" }).hiddenGroups], []);
 
+const groupOrderStart = popupSource.indexOf("function groupOrderKey");
+const groupOrderEnd = popupSource.indexOf("function renderGroupVisibilitySettings", groupOrderStart);
+const groupingStart = popupSource.indexOf("function groupedAccounts");
+const groupingEnd = popupSource.indexOf("function renderCodeRows", groupingStart);
+const applyVaultStart = popupSource.indexOf("function applyVaultState");
+const applyVaultEnd = popupSource.indexOf("async function performRefresh", applyVaultStart);
+for (const index of [groupOrderStart, groupOrderEnd, groupingStart, groupingEnd, applyVaultStart, applyVaultEnd]) {
+  assert.notEqual(index, -1, "Could not find group ordering and vault state helpers.");
+}
+const groupOrdering = new Function(`
+  let latestCodes = [], latestPageCodes = [], latestGroupOrder = [];
+  let lastVaultTickSeconds = 0, vaultExpiresAt = 0, totpRefreshPending = false;
+  const settingsPanel = { hidden: true };
+  const setAuthVisible = () => {}, setVaultVisible = () => {}, setStatus = () => {};
+  const clearStatus = () => {}, renderCodes = () => {}, scheduleIconRefresh = () => {};
+  const categoryLabel = (account) => String(account.group || "").trim() || "Uncategorized";
+  ${popupSource.slice(groupOrderStart, groupOrderEnd)}
+  ${popupSource.slice(groupingStart, groupingEnd)}
+  ${popupSource.slice(applyVaultStart, applyVaultEnd)}
+  return { applyVaultState, availableGroupLabels, groupedAccounts };
+`)();
+const rawGroupNames = ["Denizbank", "Denizbank / Azure", "Social", "Mail", "Personal", "Homelab", "AI", "Shopping"];
+const groupAccounts = rawGroupNames.map((group, id) => ({ id: String(id), group }));
+groupAccounts.push({ id: "second-mail", group: "Mail" });
+const sidebarGroupNames = ["Homelab", "Mail", "Personal", "Social", "Denizbank", "Denizbank / Azure", "Shopping", "AI"];
+groupOrdering.applyVaultState({ accounts: groupAccounts, groupOrder: sidebarGroupNames });
+assert.deepEqual(groupOrdering.groupedAccounts(groupAccounts).map((group) => group.label), sidebarGroupNames,
+  "Popup categories must follow the vault sidebar order instead of raw account order.");
+assert.deepEqual(groupOrdering.availableGroupLabels(), sidebarGroupNames,
+  "Settings must use the same category order as the code list.");
+assert.deepEqual(groupOrdering.groupedAccounts(groupAccounts)[1].accounts.map((account) => account.id), ["3", "second-mail"],
+  "Ordering categories must preserve account order within each category.");
+assert.deepEqual(groupAccounts.slice(0, 8).map((account) => account.group), rawGroupNames,
+  "Rendering must not mutate the incoming account list.");
+groupOrdering.applyVaultState({ accounts: groupAccounts, groupOrder: ["AI", "Denizbank", "Mail", "Denizbank / Azure", "AI", "Empty"] });
+assert.deepEqual(groupOrdering.availableGroupLabels(), ["AI", "Denizbank", "Denizbank / Azure", "Mail", "Social", "Personal", "Homelab", "Shopping"],
+  "Refresh must apply the new order, keep children with their parent, skip empty groups, and append unlisted groups.");
+assert.deepEqual(groupOrdering.groupedAccounts(groupAccounts.filter((account) => ["Mail", "Denizbank / Azure", "AI"].includes(account.group)))
+  .map((group) => group.label), ["AI", "Denizbank / Azure", "Mail"],
+"Filtering out a parent or page-matched accounts must retain the child category's position.");
+groupOrdering.applyVaultState({ accounts: groupAccounts, groupOrder: ["  ＭＡＩＬ  ", "homelab", "PERSONAL"] });
+assert.deepEqual(groupOrdering.availableGroupLabels(), ["Mail", "Homelab", "Personal", "Denizbank", "Denizbank / Azure", "Social", "AI", "Shopping"],
+  "Group names must use the vault's case, whitespace, and Unicode normalization for matching.");
+groupOrdering.applyVaultState({ accounts: [{ group: "A / B / C" }, { group: "Other" }, { group: "A / B" }], groupOrder: ["A", "Other", "A / B", "A / B / C"] });
+assert.deepEqual(groupOrdering.availableGroupLabels(), ["A / B", "A / B / C", "Other"],
+  "Empty parents and nested children must preserve the vault hierarchy.");
+for (const groupOrder of [undefined, null, "Mail"]) {
+  groupOrdering.applyVaultState({ accounts: groupAccounts, groupOrder });
+  assert.deepEqual(groupOrdering.availableGroupLabels(), rawGroupNames,
+    "Legacy vaults without an order must not inherit the previous vault's ordering.");
+}
+
 assert.match(inlineSource, /type: "inline-suggestions"/u);
 assert.match(inlineSource, /attachShadow\(\{ mode: "closed" \}\)/u);
 assert.match(inlineSource, /one-time-code/u);
